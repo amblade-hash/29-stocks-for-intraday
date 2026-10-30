@@ -52,9 +52,11 @@ function evaluate(bars5, daily, session, lookback = 6) {
   const sigs = st.signals.filter((s) => s.i >= dayStart);
   const sig = sigs.length ? sigs[sigs.length - 1] : null;
   const bounce = sig && lv ? PILevels.bounce(bars, sig.i, sig.side, lv, lookback, dayStart) : null;
-  const stTrend = st.st.dir[i] === 1 ? 'BULL' : 'BEAR';
-  const macdTrend = dm.trend[i];
-  const macdParts = dm.parts[i];
+  // Check 3 is judged on the signal candle (latest candle when there is no signal).
+  const k = sig ? sig.i : i;
+  const stTrend = st.st.dir[k] === 1 ? 'BULL' : 'BEAR';
+  const macdTrend = dm.trend[k];
+  const macdParts = dm.parts[k];
   const want = sig ? (sig.side === 'BUY' ? 'BULL' : 'BEAR') : null;
   const c1 = !!sig;
   const c2 = !!bounce;

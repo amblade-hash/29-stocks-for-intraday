@@ -201,18 +201,35 @@ test('opening rule: opening signals are never alerted, the stock is held till 10
   assert.strictEqual(openingHold('WATCH', [t(9 * 60 + 20), t(10 * 60 + 30)], at(10 * 60 + 35)), 'WATCH');
 });
 
-test('Dual MACD trend needs the fast MACD, slow histogram and EMA 9/21 to agree', () => {
+test('Dual MACD trend follows the fast MACD against its signal line', () => {
   const D = require('../src/engine/dualMacd.js');
   const d = JSON.parse(fs.readFileSync(path.join(__dirname, 'nifty15.json'), 'utf8'));
   const r = D.compute({ c: d.c });
-  let fastDisagrees = 0;
   for (let i = 300; i < d.c.length; i++) {
-    const p = r.parts[i];
-    const want = p.fast === 'UP' && p.slow === 'UP' && p.ema === 'UP' ? 'BULL' : p.fast === 'DOWN' && p.slow === 'DOWN' && p.ema === 'DOWN' ? 'BEAR' : 'MIXED';
-    assert.strictEqual(r.trend[i], want);
-    assert.strictEqual(p.fast, r.macd1[i] > r.signal1[i] ? 'UP' : 'DOWN');
-    // The DIVISLAB case: slow histogram and EMAs agree but the fast MACD is below its signal line.
-    if (p.slow === p.ema && p.fast !== p.slow) { fastDisagrees++; assert.strictEqual(r.trend[i], 'MIXED'); }
+    const want = r.macd1[i] > r.signal1[i] ? 'BULL' : r.macd1[i] < r.signal1[i] ? 'BEAR' : 'MIXED';
+    assert.strictEqual(r.trend[i], want, 'slow histogram and EMAs do not change the trend');
   }
-  assert.ok(fastDisagrees > 0, 'data includes candles where only the fast MACD disagrees');
+});
+
+test('check 3 is judged on the signal candle, not the latest candle', () => {
+  const { evaluate } = require('../src/scanner.js');
+  const STM = require('../src/engine/stMomentum.js');
+  const D = require('../src/engine/dualMacd.js');
+  const p = mockProvider();
+  return Promise.all([p.fiveMinute('X'), p.daily('X')]).then(([b, d]) => {
+    const st = STM.compute(b), dm = D.compute(b);
+    let checked = 0;
+    for (const s of st.signals) {
+      const day = dayOf(s.t);
+      const cp = Math.floor(((s.t + 19800) % 86400) / 60) + 5 + 30; // 30 minutes after the signal candle closed
+      if (cp < 9 * 60 + 45 || cp > 11 * 60 + 45) continue;
+      const r = evaluate(b, d, { day, cp });
+      if (r.error || !r.signal || r.signal.t !== s.t) continue;
+      const want = s.side === 'BUY' ? 'BULL' : 'BEAR';
+      assert.strictEqual(r.macdTrend, dm.trend[s.i]);
+      assert.strictEqual(r.c3, dm.trend[s.i] === want && (st.st.dir[s.i] === 1 ? 'BULL' : 'BEAR') === want);
+      checked++;
+    }
+    assert.ok(checked > 0, 'at least one signal checked');
+  });
 });

@@ -1,7 +1,6 @@
 // Port of "Dual MACD Pro + EMA Trend Filter".
-// Trend used by the scanner: BULL when the fast MACD (8/13) is above its signal line (9), the slow MACD
-// histogram (100/200/50) > 0 AND EMA9 > EMA21; BEAR when all three point down; otherwise MIXED.
-// parts[i] gives each component's own direction ('UP' / 'DOWN' / 'FLAT') so a MIXED trend can be explained.
+// Trend used by the scanner: BULL when the fast MACD (8/13) is above its signal line (9), BEAR when it is
+// below. parts[i] also gives the slow histogram (100/200/50) and EMA 9/21 directions, shown for information.
 (function (root) {
   const TA = typeof module !== 'undefined' && module.exports ? require('./ta.js') : root.TA;
 
@@ -28,7 +27,7 @@
       const bearTrend = ema9[i] < ema21[i];
       parts[i] = { fast: dir(macd1[i] - sig1Fixed[i]), slow: dir(hist2[i]), ema: dir(ema9[i] - ema21[i]) };
       const p = parts[i];
-      trend[i] = p.fast === 'UP' && p.slow === 'UP' && p.ema === 'UP' ? 'BULL' : p.fast === 'DOWN' && p.slow === 'DOWN' && p.ema === 'DOWN' ? 'BEAR' : 'MIXED';
+      trend[i] = p.fast === 'UP' ? 'BULL' : p.fast === 'DOWN' ? 'BEAR' : 'MIXED';
       const bullCross = i > 0 && macd1[i] > sig1Fixed[i] && macd1[i - 1] <= sig1Fixed[i - 1];
       const bearCross = i > 0 && macd1[i] < sig1Fixed[i] && macd1[i - 1] >= sig1Fixed[i - 1];
       buy[i] = bullCross && rsi[i] > p.rsiBull && hist2[i] > 0 && bullTrend && macd2[i] > sig2[i];
