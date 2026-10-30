@@ -176,7 +176,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const GRACE_SEC = 20;            // wait after a candle closes so the feed has it
   const BARS_5M = 1200;            // ~16 sessions: enough warm-up for the 500-bar KER rank and EMA 200
   const BARS_1D = 40;
-  const WORKERS = 4;
+  const WORKERS = 2;               // parallel TradingView requests; more tends to time out
   const CPS = []; for (let m = FIRST; m <= LAST; m += STEP) CPS.push(m);
 
   const $ = (id) => document.getElementById(id);
@@ -260,8 +260,10 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       const r = await mcp.callTool(SERVER, tool, input, { cache: false });
       return r.payload;
     } catch (e) {
-      if (!retried && e && e.retryable) {
-        await new Promise((res) => setTimeout(res, Math.min(e.retryAfterMs || 0, 60000) + 500 + Math.random() * 1500));
+      // These are read-only calls, so any failure that isn't a permission/connection problem is retried once.
+      const final = ['needs_reauth', 'server_not_connected', 'not_in_manifest', 'approval_required', 'not_granted', 'consent_required', 'blocked_by_policy', 'selection_required', 'bad_request', 'user_changed'];
+      if (!retried && e && !final.includes(e.code)) {
+        await new Promise((res) => setTimeout(res, Math.min(e.retryAfterMs || 0, 60000) + 1000 + Math.random() * 2000));
         return call(tool, input, true);
       }
       throw e;
@@ -307,14 +309,22 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const entry = cache[sym] || (cache[sym] = {});
     try {
       const p5 = await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '5m', count: BARS_5M, format: 'columns' });
-      entry.bars5 = toBars(p5);
+      const b5 = toBars(p5);
+      if (!b5 || !b5.t || !b5.t.length) throw { code: 'no_data' };
       if (wantDaily || !entry.daily) {
         const pd = await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '1D', count: BARS_1D, format: 'columns' });
         entry.daily = toBars(pd);
       }
+      entry.bars5 = b5;
       entry.error = null;
+      entry.stale = false;
+      return true;
     } catch (e) {
-      entry.error = codeOf(e);
+      entry.lastError = codeOf(e);
+      // Keep the last good candles (marked stale) rather than dropping the stock from the table.
+      if (entry.bars5 && entry.bars5.t && entry.bars5.t.length) entry.stale = true;
+      else entry.error = entry.lastError;
+      return false;
     }
   }
 
@@ -339,6 +349,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   function evaluate(sym, session) {
     const entry = cache[sym];
     if (!entry || entry.error) return { sym, error: entry ? entry.error : 'upstream_error' };
+    const staleCode = entry.stale ? entry.lastError : null;
     const b = entry.bars5;
     if (!b || !b.t || !b.t.length) return { sym, error: 'no_data' };
     const cutoff = utcOf(session.day, session.cp);
@@ -398,7 +409,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
     return {
       sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
-      sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade,
+      sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade, staleCode,
     };
   }
 
@@ -435,7 +446,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         }
         if (r.error) {
           nErr++;
-          const msg = r.error === 'no_session' ? 'No candles for this session yet' : r.error === 'no_data' ? 'No data returned' : explain(r.error);
+          const msg = r.error === 'no_session' ? 'No candles for this session yet' : r.error === 'no_data' ? 'TradingView returned no candles' : explain(r.error) + ' (error: ' + r.error + ')';
           const td = el('td', 'err', msg); td.colSpan = 6; tr.appendChild(td);
           tbody.appendChild(tr); continue;
         }
@@ -480,7 +491,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         tr.appendChild(tdV);
 
         tr.appendChild(el('td', r.sig ? null : 'dim', r.trade));
-        const tdL = el('td'); tdL.appendChild(el('div', 'num', fmt(r.ltp))); tdL.appendChild(el('div', 'dim', timeOf(r.lastT) + ' candle')); tr.appendChild(tdL);
+        const tdL = el('td'); tdL.appendChild(el('div', 'num', fmt(r.ltp))); tdL.appendChild(el('div', r.staleCode ? 'err' : 'dim', timeOf(r.lastT) + ' candle' + (r.staleCode ? ' · not refreshed (' + r.staleCode + ')' : ''))); tr.appendChild(tdL);
         tbody.appendChild(tr);
       }
       table.appendChild(tbody); box.appendChild(table); sec.appendChild(box); host.appendChild(sec);
@@ -523,15 +534,24 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       while (queue.length) {
         const s = queue.shift();
         const fd = freshDaily(s);
-        await fetchSymbol(s, fd);
-        if (cache[s] && !cache[s].error && fd) cache[s].dailyFor = today;
+        if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
         done++;
         setState('scanning', 'Scanning ' + reason + ' · ' + done + '/' + all.length);
       }
     }));
+    // Second attempt, one at a time, for any stock that failed in the first pass.
+    const failed = all.filter((s) => cache[s] && (cache[s].error || cache[s].stale));
+    for (let k = 0; k < failed.length; k++) {
+      const s = failed[k];
+      setState('scanning', 'Retrying ' + failed.length + ' stock' + (failed.length === 1 ? '' : 's') + ' · ' + (k + 1) + '/' + failed.length);
+      await new Promise((res) => setTimeout(res, 1500));
+      const fd = freshDaily(s);
+      if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
+    }
 
     // Decide the session from the first symbol that loaded.
-    const ref = all.find((s) => cache[s] && !cache[s].error && cache[s].bars5 && cache[s].bars5.t.length);
+    const ref = all.find((s) => cache[s] && !cache[s].error && !cache[s].stale && cache[s].bars5 && cache[s].bars5.t.length)
+      || all.find((s) => cache[s] && !cache[s].error && cache[s].bars5 && cache[s].bars5.t.length);
     if (!ref) {
       const codes = all.map((s) => (cache[s] && cache[s].error) || 'upstream_error');
       const banner = $('banner'); banner.hidden = false; banner.textContent = explain(codes[0]);
