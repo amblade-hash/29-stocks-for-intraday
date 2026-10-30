@@ -4,6 +4,7 @@ const { timeOf, hhmm } = require('./time.js');
 
 const DISCLAIMER = '<i>Educational alert from technical indicators. Not investment advice.</i>';
 const px = (x) => (x == null || Number.isNaN(x) ? '—' : x.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const partArrow = (d) => (d === 'UP' ? '▲' : d === 'DOWN' ? '▼' : '–');
 const arrow = (trend) => (trend === 'BULL' ? '▲' : trend === 'BEAR' ? '▼' : 'mixed');
 
 function setupBlock(row) {
@@ -17,7 +18,7 @@ function setupBlock(row) {
     head,
     `${r.c1 ? '✅' : '❌'} ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(s.entry)}`,
     r.bounce ? `✅ Bounced off PI ${r.bounce.zone} (${px(r.bounce.lo)}–${px(r.bounce.hi)}) at ${timeOf(r.bounce.t)}` : '❌ No PI zone bounce before the signal',
-    `${r.c3 ? '✅' : '❌'} Trend: Supertrend ${arrow(r.stTrend)} · Dual MACD ${arrow(r.macdTrend)}`,
+    `${r.c3 ? '✅' : '❌'} Trend: Supertrend ${arrow(r.stTrend)} · Dual MACD ${arrow(r.macdTrend)}${r.macdParts ? ` (fast ${partArrow(r.macdParts.fast)} slow ${partArrow(r.macdParts.slow)} EMA ${partArrow(r.macdParts.ema)})` : ''}`,
     `Targets 1:1 ${px(s.t1)} · 1:1.5 ${px(s.t2)} · 1:2 ${px(s.t3)} · SL: candle close through Supertrend`,
   ];
   if (r.trade && r.trade !== 'Open') lines.push(`Trade so far: ${esc(r.trade)}`);

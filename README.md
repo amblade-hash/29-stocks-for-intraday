@@ -8,7 +8,7 @@ A stock is alerted as **CONFIRMED BUY / SELL** when all three checks pass on the
 
 1. **ST Momentum Signals** fired a fresh BUY or SELL today.
 2. Within the 6 candles (30 min) up to the signal, a candle **bounced off a PI LVLS zone** (wick into R2/R1/S1/S2, close back outside it in the signal's direction).
-3. On the latest candle, **Supertrend and Dual MACD Pro** (slow histogram and EMA 9/21) both point the signal's way.
+3. On the latest candle, **Supertrend and Dual MACD Pro** both point the signal's way. Dual MACD counts as up only when the fast MACD (8/13) is above its signal line (9), the slow histogram (100/200/50) is above zero and EMA 9 is above EMA 21; down when all three are the other way.
 
 The indicator code in `src/engine/` is the same port used by the Intraday Top 27 dashboard; it reproduced the user's real NIFTY ST Momentum alerts exactly. Each setup is posted once; a restart never re-sends it. It runs Monday to Friday only and skips NSE trading holidays listed in `config/nse-holidays.json`. If a holiday is missing from the list, the server still notices that no candles have appeared by 10:00 and stops for the day without posting anything.
 

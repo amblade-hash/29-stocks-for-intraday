@@ -153,7 +153,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     <ol>
       <li><b>ST Momentum signal</b> — the latest fresh BUY or SELL from ST Momentum Signals today (Supertrend direction + ADX &gt; 20 + RSI &gt; 55 / &lt; 45 + Stoch RSI %K &gt; 60 / &lt; 40), on closed 5-minute candles.</li>
       <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
-      <li><b>Trend match</b> — on the latest closed candle, the Supertrend direction and the Dual MACD Pro trend (slow MACD histogram and EMA 9/21 agreeing) both point the same way as the signal.</li>
+      <li><b>Trend match</b> — on the latest closed candle, the Supertrend direction and the Dual MACD Pro trend (fast MACD vs its signal line, slow MACD histogram, and EMA 9/21, all three agreeing) both point the same way as the signal.</li>
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
@@ -366,6 +366,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const bounce = sig && lv ? PILevels.bounce(bars, sig.i, sig.side, lv, lookback, dayStart) : null;
     const stTrend = st.st.dir[i] === 1 ? 'BULL' : 'BEAR';
     const macdTrend = dm.trend[i];
+    const macdParts = dm.parts[i];
     const want = sig ? (sig.side === 'BUY' ? 'BULL' : 'BEAR') : null;
     const c1 = !!sig;
     const c2 = !!bounce;
@@ -394,7 +395,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
 
     return {
-      sym, sig, bounce, lv, stTrend, macdTrend, c1, c2, c3, verdict, trade,
+      sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
       sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade,
     };
   }
@@ -463,8 +464,11 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         else tr.appendChild(checkCell(false, 'No zone bounce', 'in last ' + lookbackSel.value + ' candles'));
 
         // 3. trend
+        const pa = (d) => (d === 'UP' ? '▲' : d === 'DOWN' ? '▼' : '–');
         const trendTxt = 'ST ' + (r.stTrend === 'BULL' ? '▲' : '▼') + ' · MACD ' + (r.macdTrend === 'BULL' ? '▲' : r.macdTrend === 'BEAR' ? '▼' : 'mixed');
-        tr.appendChild(checkCell(r.c3, trendTxt, r.sig ? (r.c3 ? 'Both agree with ' + r.sig.side : 'Not aligned with ' + r.sig.side) : (r.stTrend === r.macdTrend ? 'Aligned, no signal' : 'Not aligned'), !r.sig));
+        const partsTxt = 'Fast ' + pa(r.macdParts.fast) + ' · Slow ' + pa(r.macdParts.slow) + ' · EMA ' + pa(r.macdParts.ema);
+        const trendSub = r.sig ? (r.c3 ? 'Agree with ' + r.sig.side + ' · ' + partsTxt : partsTxt) : partsTxt;
+        tr.appendChild(checkCell(r.c3, trendTxt, trendSub, !r.sig));
 
         // verdict
         const tdV = el('td');
@@ -566,7 +570,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       `${buy ? '🟢' : '🔴'} <b>CONFIRMED ${s.side} · ${esc(short(sym))}</b> (${esc(tierOf(sym))})`,
       `✅ ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(tr.entry)}`,
       `✅ Bounced off PI ${r.bounce.zone} (${px(z.lo)}–${px(z.hi)}) at ${timeOf(r.bounce.t)}`,
-      `✅ Trend: Supertrend ${arrow(r.stTrend)} · Dual MACD ${arrow(r.macdTrend)}`,
+      `✅ Trend: Supertrend ${arrow(r.stTrend)} · Dual MACD ${arrow(r.macdTrend)} (fast ${arrow(r.macdParts.fast === 'UP' ? 'BULL' : 'BEAR')} slow ${arrow(r.macdParts.slow === 'UP' ? 'BULL' : 'BEAR')} EMA ${arrow(r.macdParts.ema === 'UP' ? 'BULL' : 'BEAR')})`,
       `Targets 1:1 ${px(tr.t1)} · 1:1.5 ${px(tr.t2)} · 1:2 ${px(tr.t3)} · SL: candle close through Supertrend`,
     ];
     if (r.trade && r.trade !== 'Open') lines.push('Trade so far: ' + esc(r.trade));

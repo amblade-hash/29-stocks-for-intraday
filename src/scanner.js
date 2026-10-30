@@ -54,6 +54,7 @@ function evaluate(bars5, daily, session, lookback = 6) {
   const bounce = sig && lv ? PILevels.bounce(bars, sig.i, sig.side, lv, lookback, dayStart) : null;
   const stTrend = st.st.dir[i] === 1 ? 'BULL' : 'BEAR';
   const macdTrend = dm.trend[i];
+  const macdParts = dm.parts[i];
   const want = sig ? (sig.side === 'BUY' ? 'BULL' : 'BEAR') : null;
   const c1 = !!sig;
   const c2 = !!bounce;
@@ -70,7 +71,7 @@ function evaluate(bars5, daily, session, lookback = 6) {
   }
   const zone = bounce && lv.zones.find((z) => z.name === bounce.zone);
   return {
-    verdict, c1, c2, c3, stTrend, macdTrend, trade,
+    verdict, c1, c2, c3, stTrend, macdTrend, macdParts, trade,
     signal: sig && { side: sig.side, t: sig.t, entry: sig.trade.entry, t1: sig.trade.t1, t2: sig.trade.t2, t3: sig.trade.t3 },
     bounce: bounce && { zone: bounce.zone, t: bounce.t, lo: zone.lo, hi: zone.hi },
     levels: lv && { center: lv.center, unit: lv.unit },

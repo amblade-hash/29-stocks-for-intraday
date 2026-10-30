@@ -200,3 +200,19 @@ test('opening rule: opening signals are never alerted, the stock is held till 10
   assert.strictEqual(openingHold('SELL', [t(9 * 60 + 20), t(9 * 60 + 55)], at(10 * 60 + 15)), 'SELL');
   assert.strictEqual(openingHold('WATCH', [t(9 * 60 + 20), t(10 * 60 + 30)], at(10 * 60 + 35)), 'WATCH');
 });
+
+test('Dual MACD trend needs the fast MACD, slow histogram and EMA 9/21 to agree', () => {
+  const D = require('../src/engine/dualMacd.js');
+  const d = JSON.parse(fs.readFileSync(path.join(__dirname, 'nifty15.json'), 'utf8'));
+  const r = D.compute({ c: d.c });
+  let fastDisagrees = 0;
+  for (let i = 300; i < d.c.length; i++) {
+    const p = r.parts[i];
+    const want = p.fast === 'UP' && p.slow === 'UP' && p.ema === 'UP' ? 'BULL' : p.fast === 'DOWN' && p.slow === 'DOWN' && p.ema === 'DOWN' ? 'BEAR' : 'MIXED';
+    assert.strictEqual(r.trend[i], want);
+    assert.strictEqual(p.fast, r.macd1[i] > r.signal1[i] ? 'UP' : 'DOWN');
+    // The DIVISLAB case: slow histogram and EMAs agree but the fast MACD is below its signal line.
+    if (p.slow === p.ema && p.fast !== p.slow) { fastDisagrees++; assert.strictEqual(r.trend[i], 'MIXED'); }
+  }
+  assert.ok(fastDisagrees > 0, 'data includes candles where only the fast MACD disagrees');
+});
