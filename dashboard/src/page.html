@@ -125,6 +125,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         </select>
       </label>
       <button id="sound" type="button" aria-pressed="false">Sound alert: off</button>
+      <button id="tg" type="button" aria-pressed="true">Telegram alerts: on</button>
     </div>
   </header>
 
@@ -133,6 +134,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <div class="state" id="state" data-mode="idle"><span class="dot"></span><span id="stateText">Starting…</span></div>
       <div class="meta" id="meta">—</div>
     </div>
+    <div class="meta" id="tgStatus">Telegram: confirmed setups and the 11:45 summary go to “Stocks to trade by Bladebot242” during the 09:45–11:45 scans.</div>
     <div>
       <div class="rail" id="rail"></div>
       <div class="rail-labels"><span>09:45</span><span>10:15</span><span>10:45</span><span>11:15</span><span>11:45 IST</span></div>
@@ -152,6 +154,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>Trend match</b> — on the latest closed candle, the Supertrend direction and the Dual MACD Pro trend (slow MACD histogram and EMA 9/21 agreeing) both point the same way as the signal.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
+    <p>With Telegram alerts on, each new Confirmed buy or sell is posted to the Telegram channel at the scan that finds it, and the closing summary after the 11:45 scan. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
   </details>
 </div>
 
@@ -188,6 +191,17 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   let sessionLabel = '';
   let soundOn = store.get('soundOn', '0') === '1';
   let audioCtx = null;
+
+  // ---------- Telegram (through the viewer's Zapier connection) ----------
+  const ZAPIER = 'Zapier';
+  const TG_CHAT = '-1003899528123'; // "Stocks to trade by Bladebot242"
+  let tgOn = store.get('tgOn', '1') === '1';
+  const tgBtn = document.getElementById('tg');
+  const paintTg = () => { tgBtn.setAttribute('aria-pressed', String(tgOn)); tgBtn.textContent = 'Telegram alerts: ' + (tgOn ? 'on' : 'off'); };
+  paintTg();
+  tgBtn.addEventListener('click', () => { tgOn = !tgOn; store.set('tgOn', tgOn ? '1' : '0'); paintTg(); });
+  const loadSent = (day) => { try { return JSON.parse(store.get('tgSent-' + day, '{}')); } catch (e) { return {}; } };
+  const saveSent = (day, obj) => store.set('tgSent-' + day, JSON.stringify(obj));
 
   const lookbackSel = $('lookback');
   lookbackSel.value = store.get('lookback', '6');
@@ -520,7 +534,113 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     render();
     paintRail(session.day, session.cp);
     if (newConfirmed) beep();
+    await notifyTelegram(session);
     return session;
+  }
+
+  // ---------- Telegram messages ----------
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const px = (x) => (x == null || Number.isNaN(x) ? '—' : x.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  const arrow = (t) => (t === 'BULL' ? '▲' : t === 'BEAR' ? '▼' : 'mixed');
+  const DISCLAIMER = '<i>Educational alert from technical indicators. Not investment advice.</i>';
+  const tierOf = (sym) => { const g = groups.find((x) => x.symbols.includes(sym)); return g ? g.name : ''; };
+  const short = (sym) => sym.replace(/^NSE:/, '');
+
+  function setupHtml(sym, r) {
+    const s = r.sig, tr = r.tradeObj, buy = s.side === 'BUY';
+    const z = r.bounce && r.lv.zones.find((x) => x.name === r.bounce.zone);
+    const lines = [
+      `${buy ? '🟢' : '🔴'} <b>CONFIRMED ${s.side} · ${esc(short(sym))}</b> (${esc(tierOf(sym))})`,
+      `✅ ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(tr.entry)}`,
+      `✅ Bounced off PI ${r.bounce.zone} (${px(z.lo)}–${px(z.hi)}) at ${timeOf(r.bounce.t)}`,
+      `✅ Trend: Supertrend ${arrow(r.stTrend)} · Dual MACD ${arrow(r.macdTrend)}`,
+      `Targets 1:1 ${px(tr.t1)} · 1:1.5 ${px(tr.t2)} · 1:2 ${px(tr.t3)} · SL: candle close through Supertrend`,
+    ];
+    if (r.trade && r.trade !== 'Open') lines.push('Trade so far: ' + esc(r.trade));
+    return lines.join('\n');
+  }
+
+  function summaryHtml(day, sent) {
+    const all = groups.flatMap((g) => g.symbols);
+    const parts = [`<b>Intraday Top 27 · scan closed ${esc(dateLabel(day))} 11:45 IST</b>`];
+    const keys = Object.keys(sent).filter((k) => k.includes('|'));
+    if (keys.length) {
+      parts.push(`📨 <b>Alerts sent today (${keys.length})</b>\n` + keys.map((k) => {
+        const [side, sym, t] = k.split('|');
+        const r = results[sym];
+        const now = r && r.sig && String(r.sig.t) === t ? r.trade : r && r.sig ? `replaced by ${r.sig.side} at ${timeOf(r.sig.t)}` : 'no longer active';
+        return `• <b>${esc(short(sym))}</b> ${side} ${timeOf(Number(t))} (alerted ${esc(sent[k])}) · now: ${esc(now)}`;
+      }).join('\n'));
+    }
+    const pick = (v) => all.filter((s) => results[s] && results[s].verdict === v);
+    const line = (s) => { const r = results[s]; return `• <b>${esc(short(s))}</b> ${timeOf(r.sig.t)} · entry ${px(r.tradeObj.entry)}${r.bounce ? ' · ' + r.bounce.zone + ' bounce' : ''}${r.trade !== 'Open' ? ' · ' + esc(r.trade) : ''}`; };
+    const buys = pick('buy'), sells = pick('sell'), watch = pick('watch');
+    parts.push('<b>Status at 11:45</b>');
+    parts.push(`🟢 <b>Confirmed buy (${buys.length})</b>\n${buys.length ? buys.map(line).join('\n') : 'None'}`);
+    parts.push(`🔴 <b>Confirmed sell (${sells.length})</b>\n${sells.length ? sells.map(line).join('\n') : 'None'}`);
+    if (watch.length) parts.push(`🟡 <b>Watch, 2 of 3 (${watch.length})</b>\n${watch.map((s) => `• ${esc(short(s))} ${results[s].sig.side} ${timeOf(results[s].sig.t)}`).join('\n')}`);
+    const failed = all.filter((s) => results[s] && results[s].error);
+    if (failed.length) parts.push('⚠️ Not scanned: ' + failed.map((s) => esc(short(s))).join(', '));
+    parts.push('No more scans today. Next scan 09:45 IST on the next trading day.');
+    parts.push(DISCLAIMER);
+    return parts.join('\n\n');
+  }
+
+  async function tgSend(html) {
+    const r = await mcp.callTool(ZAPIER, 'execute_zapier_write_action', {
+      selected_api: 'TelegramCLIAPI', action: 'send_message', tool_name: 'telegram_send_message',
+      params: { chat_id: TG_CHAT, format: 'html', disable_link_preview: 'true', text: html },
+    }, { cache: false });
+    const p = r && r.payload;
+    if (!p || !Array.isArray(p.results) || !p.results.length) {
+      const e = new Error(typeof p === 'string' ? p : (p && (p.error || p.message)) || 'Zapier did not confirm the message');
+      e.code = 'tool_error';
+      throw e;
+    }
+  }
+
+  function tgExplain(e) {
+    switch (codeOf(e)) {
+      case 'server_not_connected': return 'Zapier isn’t connected to your claude.ai account. Add it in Settings → Connectors, then reload.';
+      case 'needs_reauth': return 'Your Zapier connection has expired. Reconnect it in claude.ai Settings → Connectors, then reload.';
+      case 'not_in_manifest':
+      case 'approval_required':
+      case 'not_granted':
+      case 'consent_required': return 'Allow Zapier for this page (claude.ai asks the first time, or use the page’s Permissions menu), then reload.';
+      default: return 'Zapier didn’t send it (' + (e.message || codeOf(e)) + '). The next scan tries again.';
+    }
+  }
+
+  // Posts new Confirmed setups found by this scan, and the summary after 11:45.
+  // Only during the live window, so opening the page later in the day never posts stale alerts.
+  async function notifyTelegram(session) {
+    const now = nowIst();
+    const tgStatus = $('tgStatus');
+    if (!tgOn || !session.live || session.day !== now.day || now.min > LAST + 2) return;
+    const sent = loadSent(session.day);
+    const fresh = [];
+    for (const g of groups) for (const sym of g.symbols) {
+      const r = results[sym];
+      if (!r || r.error || !r.sig || (r.verdict !== 'buy' && r.verdict !== 'sell')) continue;
+      const key = r.sig.side + '|' + sym + '|' + r.sig.t;
+      if (!sent[key]) fresh.push({ sym, r, key });
+    }
+    try {
+      if (fresh.length) {
+        await tgSend([`<b>Intraday Top 27 · ${hhmm(session.cp)} IST scan</b>`, ...fresh.map((f) => setupHtml(f.sym, f.r)), DISCLAIMER].join('\n\n'));
+        for (const f of fresh) sent[f.key] = hhmm(session.cp);
+        saveSent(session.day, sent);
+      }
+      if (session.cp === LAST && !sent._summary) {
+        await tgSend(summaryHtml(session.day, sent));
+        sent._summary = true;
+        saveSent(session.day, sent);
+      }
+      const n = Object.keys(sent).filter((k) => k.includes('|')).length;
+      tgStatus.textContent = 'Telegram: ' + n + ' alert' + (n === 1 ? '' : 's') + ' sent today' + (fresh.length ? ' · last at ' + hhmm(session.cp) + ' IST' : '') + (sent._summary ? ' · summary sent' : '');
+    } catch (e) {
+      tgStatus.textContent = 'Telegram: ' + tgExplain(e);
+    }
   }
 
   // One loop every 10 s decides whether a checkpoint is due.
