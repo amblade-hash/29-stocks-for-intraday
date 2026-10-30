@@ -1,0 +1,588 @@
+<title>Intraday Top 27 Scanner</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a trading-desk sheet. Status strip + 9:45–11:45 checkpoint rail on top, then one ledger table per tier. */
+:root {
+  --bg: #f6f7f5;
+  --panel: #ffffff;
+  --ink: #17201c;
+  --muted: #5d6a63;
+  --line: #dde3df;
+  --accent: #1f5f8b;
+  --buy: #0f7a4a;
+  --buy-soft: #e2f3ea;
+  --sell: #b42d2d;
+  --sell-soft: #f8e4e2;
+  --warn: #a86a00;
+  --warn-soft: #fbf0d9;
+  --neutral-soft: #eef1ef;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101513; --panel: #161d1a; --ink: #e5ebe7; --muted: #94a39b; --line: #27312c; --accent: #6fb3e0;
+    --buy: #4cc98a; --buy-soft: #15301f; --sell: #ef7a72; --sell-soft: #3a1b19; --warn: #e2b04f; --warn-soft: #33290f; --neutral-soft: #1d2522;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101513; --panel: #161d1a; --ink: #e5ebe7; --muted: #94a39b; --line: #27312c; --accent: #6fb3e0;
+  --buy: #4cc98a; --buy-soft: #15301f; --sell: #ef7a72; --sell-soft: #3a1b19; --warn: #e2b04f; --warn-soft: #33290f; --neutral-soft: #1d2522;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; max-width: 1280px; margin: 0 auto; display: grid; gap: 20px; }
+
+.head { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; }
+.head h1 { font-family: var(--font-display); font-weight: 700; font-size: 1.75rem; letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+.head .sub { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+select, button { font: inherit; font-size: 0.85rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+button { cursor: pointer; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.status { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 12px; }
+.status-top { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; justify-content: space-between; }
+.state { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.state[data-mode="live"] .dot { background: var(--buy); box-shadow: 0 0 0 4px var(--buy-soft); }
+.state[data-mode="scanning"] .dot { background: var(--accent); animation: pulse 1s infinite; }
+.state[data-mode="closed"] .dot { background: var(--muted); }
+.state[data-mode="error"] .dot { background: var(--sell); }
+@keyframes pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .state[data-mode="scanning"] .dot { animation: none; } }
+.meta { font-family: var(--font-data); font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.rail { display: grid; grid-template-columns: repeat(25, 1fr); gap: 3px; align-items: end; }
+.rail span { height: 8px; border-radius: 2px; background: var(--neutral-soft); border: 1px solid var(--line); }
+.rail span.done { background: var(--accent); border-color: var(--accent); }
+.rail span.now { height: 14px; background: var(--accent); border-color: var(--accent); }
+.rail-labels { display: flex; justify-content: space-between; font-family: var(--font-data); font-size: 0.7rem; color: var(--muted); }
+
+.summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; background: var(--neutral-soft); color: var(--ink); white-space: nowrap; }
+.chip b { font-family: var(--font-data); font-weight: 600; }
+.chip.buy { background: var(--buy-soft); color: var(--buy); }
+.chip.sell { background: var(--sell-soft); color: var(--sell); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+
+.banner { border: 1px solid var(--sell); background: var(--sell-soft); color: var(--ink); border-radius: 10px; padding: 12px 16px; font-size: 0.9rem; }
+
+.tier { display: grid; gap: 8px; }
+.tier h2 { font-family: var(--font-display); font-size: 1rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.tablebox { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 880px; font-size: 0.85rem; }
+th { text-align: left; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th small { display: block; text-transform: none; letter-spacing: 0; font-weight: 400; }
+td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+tr.confirmed-buy td:first-child { box-shadow: inset 4px 0 0 var(--buy); }
+tr.confirmed-sell td:first-child { box-shadow: inset 4px 0 0 var(--sell); }
+tr.confirmed-buy { background: color-mix(in srgb, var(--buy-soft) 55%, transparent); }
+tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transparent); }
+.sym { font-family: var(--font-data); font-weight: 600; }
+.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.dim { color: var(--muted); font-size: 0.78rem; }
+.check { display: flex; align-items: center; gap: 8px; }
+.mark { width: 20px; height: 20px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 0.75rem; font-weight: 700; flex: none; background: var(--neutral-soft); color: var(--muted); }
+.mark.pass { background: var(--buy-soft); color: var(--buy); }
+.mark.fail { background: var(--sell-soft); color: var(--sell); }
+.side { font-weight: 700; font-family: var(--font-display); letter-spacing: 0.04em; }
+.side.buy { color: var(--buy); }
+.side.sell { color: var(--sell); }
+.verdict { display: inline-block; padding: 3px 9px; border-radius: 5px; font-family: var(--font-display); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.04em; white-space: nowrap; background: var(--neutral-soft); color: var(--muted); }
+.verdict.buy { background: var(--buy); color: var(--panel); }
+.verdict.sell { background: var(--sell); color: var(--panel); }
+.verdict.watch { background: var(--warn-soft); color: var(--warn); }
+.new { margin-left: 6px; font-size: 0.65rem; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; }
+.err { color: var(--sell); font-size: 0.8rem; }
+
+.rules { color: var(--muted); font-size: 0.8rem; line-height: 1.55; max-width: 75ch; }
+.rules summary { cursor: pointer; font-weight: 600; color: var(--ink); }
+.rules ol { padding-left: 1.2em; }
+</style>
+
+<div class="wrap">
+  <header class="head">
+    <div>
+      <h1>Intraday Top 27</h1>
+      <div class="sub">ST Momentum signal · PI LVLS zone bounce · Dual MACD trend match — 5-minute chart, NSE</div>
+    </div>
+    <div class="controls">
+      <label for="lookback">Bounce window
+        <select id="lookback">
+          <option value="3">3 candles (15 min)</option>
+          <option value="6" selected>6 candles (30 min)</option>
+          <option value="9">9 candles (45 min)</option>
+          <option value="12">12 candles (60 min)</option>
+        </select>
+      </label>
+      <button id="sound" type="button" aria-pressed="false">Sound alert: off</button>
+    </div>
+  </header>
+
+  <section class="status" aria-live="polite">
+    <div class="status-top">
+      <div class="state" id="state" data-mode="idle"><span class="dot"></span><span id="stateText">Starting…</span></div>
+      <div class="meta" id="meta">—</div>
+    </div>
+    <div>
+      <div class="rail" id="rail"></div>
+      <div class="rail-labels"><span>09:45</span><span>10:15</span><span>10:45</span><span>11:15</span><span>11:45 IST</span></div>
+    </div>
+    <div class="summary" id="summary"></div>
+  </section>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <div id="tiers"></div>
+
+  <details class="rules">
+    <summary>How each stock is checked</summary>
+    <ol>
+      <li><b>ST Momentum signal</b> — the latest fresh BUY or SELL from ST Momentum Signals today (Supertrend direction + ADX &gt; 20 + RSI &gt; 55 / &lt; 45 + Stoch RSI %K &gt; 60 / &lt; 40), on closed 5-minute candles.</li>
+      <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
+      <li><b>Trend match</b> — on the latest closed candle, the Supertrend direction and the Dual MACD Pro trend (slow MACD histogram and EMA 9/21 agreeing) both point the same way as the signal.</li>
+    </ol>
+    <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
+  </details>
+</div>
+
+<script>
+/*__ENGINE__*/
+</script>
+<script>
+(function () {
+  const SERVER = 'Trading View';
+  const WATCHLIST_ID = '353091624';
+  const IST = 19800;               // seconds east of UTC
+  const FIRST = 9 * 60 + 45;       // 09:45 IST, minutes since midnight
+  const LAST = 11 * 60 + 45;       // 11:45 IST
+  const STEP = 5;
+  const GRACE_SEC = 20;            // wait after a candle closes so the feed has it
+  const BARS_5M = 1200;            // ~16 sessions: enough warm-up for the 500-bar KER rank and EMA 200
+  const BARS_1D = 40;
+  const WORKERS = 4;
+  const CPS = []; for (let m = FIRST; m <= LAST; m += STEP) CPS.push(m);
+
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  };
+
+  let mcp = null;
+  let groups = [];                 // [{name, symbols: []}]
+  const cache = {};                // symbol -> {bars5, daily, dailyDay, error}
+  let results = {};                // symbol -> evaluated row
+  let prevVerdict = {};
+  let scanned = { day: null, cp: null };
+  let busy = false;
+  let sessionLabel = '';
+  let soundOn = store.get('soundOn', '0') === '1';
+  let audioCtx = null;
+
+  const lookbackSel = $('lookback');
+  lookbackSel.value = store.get('lookback', '6');
+  lookbackSel.addEventListener('change', () => { store.set('lookback', lookbackSel.value); reevaluate(); });
+  const soundBtn = $('sound');
+  const paintSound = () => { soundBtn.setAttribute('aria-pressed', String(soundOn)); soundBtn.textContent = 'Sound alert: ' + (soundOn ? 'on' : 'off'); };
+  paintSound();
+  soundBtn.addEventListener('click', () => {
+    soundOn = !soundOn; store.set('soundOn', soundOn ? '1' : '0'); paintSound();
+    if (soundOn) { try { audioCtx = audioCtx || new AudioContext(); audioCtx.resume(); beep(); } catch (e) {} }
+  });
+  function beep() {
+    if (!soundOn || !audioCtx) return;
+    try {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + 0.25);
+    } catch (e) {}
+  }
+
+  // ---------- time helpers (IST) ----------
+  const nowIst = () => { const s = Date.now() / 1000 + IST; return { day: Math.floor(s / 86400), min: Math.floor((s % 86400) / 60), sec: s % 60 }; };
+  const dayOf = (t) => Math.floor((t + IST) / 86400);
+  const utcOf = (day, min) => day * 86400 + min * 60 - IST;
+  const hhmm = (min) => String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0');
+  const timeOf = (t) => hhmm(Math.floor(((t + IST) % 86400) / 60));
+  const dateLabel = (day) => new Date(day * 86400000).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const fmt = (x) => (x == null || Number.isNaN(x) ? '—' : x.toFixed(2));
+
+  // ---------- status ----------
+  function setState(mode, text, meta) {
+    $('state').dataset.mode = mode; $('stateText').textContent = text;
+    if (meta !== undefined) $('meta').textContent = meta;
+  }
+  function paintRail(day, cp) {
+    const today = nowIst();
+    const rail = $('rail'); rail.textContent = '';
+    for (const m of CPS) {
+      const s = document.createElement('span');
+      s.title = hhmm(m);
+      if (cp != null && m < cp) s.className = 'done';
+      if (cp != null && m === cp) s.className = 'now';
+      if (cp == null && day === today.day && m <= today.min) s.className = 'done';
+      rail.appendChild(s);
+    }
+  }
+
+  // ---------- connector ----------
+  function codeOf(e) { return (e && e.code) || 'upstream_error'; }
+  async function call(tool, input, retried) {
+    try {
+      const r = await mcp.callTool(SERVER, tool, input, { cache: false });
+      return r.payload;
+    } catch (e) {
+      if (!retried && e && e.retryable) {
+        await new Promise((res) => setTimeout(res, Math.min(e.retryAfterMs || 0, 60000) + 500 + Math.random() * 1500));
+        return call(tool, input, true);
+      }
+      throw e;
+    }
+  }
+  function explain(code) {
+    switch (code) {
+      case 'server_not_connected': return 'TradingView isn’t connected for your account. Add it in claude.ai Settings → Connectors, then reload this page.';
+      case 'needs_reauth': return 'Your TradingView connection has expired. Reconnect it in claude.ai Settings → Connectors, then reload this page.';
+      case 'not_in_manifest':
+      case 'approval_required':
+      case 'not_granted':
+      case 'consent_required': return 'This page needs your permission to read TradingView data. Allow TradingView in this page’s Permissions menu, then reload.';
+      case 'selection_required': return 'You have more than one TradingView connector. Choose one in the prompt claude.ai shows, then reload.';
+      case 'blocked_by_policy': return 'Your organization’s policy blocks TradingView for this page.';
+      case 'server_unavailable': return 'TradingView didn’t answer in time. The next scan will try again.';
+      default: return 'TradingView returned an error. The next scan will try again.';
+    }
+  }
+
+  async function loadWatchlist() {
+    const p = await call('mcp-watchlist-get-watchlist', { watchlist_id: WATCHLIST_ID });
+    const syms = (p && p.watchlist && p.watchlist.symbols) || [];
+    const out = [];
+    let cur = null;
+    for (const s of syms) {
+      if (s.startsWith('###')) { cur = { name: s.slice(3).trim() || 'Watchlist', symbols: [] }; out.push(cur); continue; }
+      if (!cur) { cur = { name: 'Watchlist', symbols: [] }; out.push(cur); }
+      cur.symbols.push(s);
+    }
+    return out.filter((g) => g.symbols.length);
+  }
+
+  const toBars = (p) => {
+    const b = p && p.bars;
+    if (!b) return null;
+    if (Array.isArray(b)) return { t: b.map((x) => x.t), o: b.map((x) => x.o), h: b.map((x) => x.h), l: b.map((x) => x.l), c: b.map((x) => x.c), v: b.map((x) => x.v) };
+    return { t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v };
+  };
+  const slice = (b, n) => ({ t: b.t.slice(0, n), o: b.o.slice(0, n), h: b.h.slice(0, n), l: b.l.slice(0, n), c: b.c.slice(0, n), v: b.v.slice(0, n) });
+
+  async function fetchSymbol(sym, wantDaily) {
+    const entry = cache[sym] || (cache[sym] = {});
+    try {
+      const p5 = await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '5m', count: BARS_5M, format: 'columns' });
+      entry.bars5 = toBars(p5);
+      if (wantDaily || !entry.daily) {
+        const pd = await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '1D', count: BARS_1D, format: 'columns' });
+        entry.daily = toBars(pd);
+      }
+      entry.error = null;
+    } catch (e) {
+      entry.error = codeOf(e);
+    }
+  }
+
+  // ---------- evaluation ----------
+  // Pick the session to show and the checkpoint to cut it at.
+  function pickSession(bars5) {
+    const now = nowIst();
+    const s = now.min * 60 + now.sec;
+    const days = [...new Set(bars5.t.map(dayOf))].sort((a, b) => a - b);
+    if (days.includes(now.day) && s >= FIRST * 60 + GRACE_SEC) {
+      // Today: the latest checkpoint whose candle has closed (plus grace), capped at 11:45.
+      let cp = FIRST;
+      for (const m of CPS) if (m * 60 + GRACE_SEC <= s) cp = m;
+      return { day: now.day, cp, live: true };
+    }
+    // Before 09:45 or no session today: the previous session's final 11:45 result.
+    const past = days.filter((d) => d < now.day);
+    const day = past.length ? past[past.length - 1] : days[days.length - 1];
+    return { day, cp: LAST, live: false };
+  }
+
+  function evaluate(sym, session) {
+    const entry = cache[sym];
+    if (!entry || entry.error) return { sym, error: entry ? entry.error : 'upstream_error' };
+    const b = entry.bars5;
+    if (!b || !b.t || !b.t.length) return { sym, error: 'no_data' };
+    const cutoff = utcOf(session.day, session.cp);
+    let n = 0;
+    while (n < b.t.length && b.t[n] + 300 <= cutoff) n++;
+    const bars = slice(b, n);
+    const dayStart = bars.t.findIndex((t) => dayOf(t) === session.day);
+    if (dayStart < 0) return { sym, error: 'no_session' };
+    const i = n - 1;
+
+    const daily = entry.daily;
+    let lv = null;
+    if (daily && daily.t) {
+      let k = 0;
+      while (k < daily.t.length && dayOf(daily.t[k]) <= session.day) k++;
+      const d = slice(daily, k);
+      if (k && dayOf(d.t[k - 1]) === session.day) lv = PILevels.levels(d);
+    }
+
+    const st = STMomentum.compute(bars);
+    const dm = DualMACD.compute(bars);
+    const sigs = st.signals.filter((s) => s.i >= dayStart);
+    const sig = sigs.length ? sigs[sigs.length - 1] : null;
+    const lookback = Number(lookbackSel.value) || 6;
+    const bounce = sig && lv ? PILevels.bounce(bars, sig.i, sig.side, lv, lookback, dayStart) : null;
+    const stTrend = st.st.dir[i] === 1 ? 'BULL' : 'BEAR';
+    const macdTrend = dm.trend[i];
+    const want = sig ? (sig.side === 'BUY' ? 'BULL' : 'BEAR') : null;
+    const c1 = !!sig;
+    const c2 = !!bounce;
+    const c3 = sig ? stTrend === want && macdTrend === want : false;
+    const passes = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0);
+    let verdict = 'none';
+    if (sig && passes === 3) verdict = sig.side === 'BUY' ? 'buy' : 'sell';
+    else if (sig && passes === 2) verdict = 'watch';
+
+    let trade = '—';
+    if (sig) {
+      const tr = sig.trade;
+      if (tr.exit === 'SL') trade = 'Stopped (Supertrend close)';
+      else if (tr.exit === 'TSL') trade = 'Trailed out (EMA 10)';
+      else if (tr.exit === 'T3' || tr.t3Hit) trade = 'Exit 3 hit (1:2)';
+      else if (tr.t2Hit) trade = 'Exit 2 hit (1:1.5)';
+      else if (tr.t1Hit) trade = 'Exit 1 hit (1:1)';
+      else trade = 'Open';
+    }
+
+    return {
+      sym, sig, bounce, lv, stTrend, macdTrend, c1, c2, c3, verdict, trade,
+      sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade,
+    };
+  }
+
+  // ---------- rendering ----------
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function checkCell(pass, main, sub, na) {
+    const td = el('td'); const wrap = el('div', 'check');
+    wrap.appendChild(el('span', 'mark ' + (na ? '' : pass ? 'pass' : 'fail'), na ? '–' : pass ? '✓' : '✕'));
+    const txt = el('div'); txt.appendChild(el('div', null, main)); if (sub) txt.appendChild(el('div', 'dim', sub));
+    wrap.appendChild(txt); td.appendChild(wrap); return td;
+  }
+
+  function render() {
+    const host = $('tiers'); host.textContent = '';
+    let nBuy = 0, nSell = 0, nWatch = 0, nSig = 0, nErr = 0;
+    for (const g of groups) {
+      const sec = el('section', 'tier');
+      sec.appendChild(el('h2', null, g.name + ' · ' + g.symbols.length));
+      const box = el('div', 'tablebox');
+      const table = el('table');
+      const thead = el('thead'); const hr = el('tr');
+      const heads = [['Stock', ''], ['① ST Momentum', 'latest signal today'], ['② PI LVLS', 'zone bounce'], ['③ Trend', 'Supertrend / Dual MACD'], ['Verdict', ''], ['Trade', 'since signal'], ['LTP', 'last closed candle']];
+      for (const [h, s] of heads) { const th = el('th', null, h); if (s) th.appendChild(el('small', null, s)); hr.appendChild(th); }
+      thead.appendChild(hr); table.appendChild(thead);
+      const tbody = el('tbody');
+      for (const sym of g.symbols) {
+        const r = results[sym];
+        const tr = el('tr');
+        const name = sym.replace(/^NSE:/, '');
+        const tdSym = el('td'); tdSym.appendChild(el('span', 'sym', name)); tr.appendChild(tdSym);
+        if (!r) {
+          const td = el('td', 'dim', busy ? 'Scanning…' : 'Waiting for first scan'); td.colSpan = 6; tr.appendChild(td);
+          tbody.appendChild(tr); continue;
+        }
+        if (r.error) {
+          nErr++;
+          const msg = r.error === 'no_session' ? 'No candles for this session yet' : r.error === 'no_data' ? 'No data returned' : explain(r.error);
+          const td = el('td', 'err', msg); td.colSpan = 6; tr.appendChild(td);
+          tbody.appendChild(tr); continue;
+        }
+        if (r.sig) nSig++;
+        if (r.verdict === 'buy') { nBuy++; tr.className = 'confirmed-buy'; }
+        if (r.verdict === 'sell') { nSell++; tr.className = 'confirmed-sell'; }
+        if (r.verdict === 'watch') nWatch++;
+
+        // 1. signal
+        const td1 = el('td'); const w1 = el('div', 'check');
+        w1.appendChild(el('span', 'mark ' + (r.c1 ? 'pass' : 'fail'), r.c1 ? '✓' : '✕'));
+        const t1 = el('div');
+        if (r.sig) {
+          const line = el('div'); line.appendChild(el('span', 'side ' + (r.sig.side === 'BUY' ? 'buy' : 'sell'), r.sig.side));
+          line.appendChild(document.createTextNode(' ' + timeOf(r.sig.t)));
+          t1.appendChild(line);
+          t1.appendChild(el('div', 'dim', 'Entry ' + fmt(r.tradeObj.entry) + (r.sigCount > 1 ? ' · ' + r.sigCount + ' signals today' : '')));
+        } else {
+          t1.appendChild(el('div', null, 'No signal today'));
+        }
+        w1.appendChild(t1); td1.appendChild(w1); tr.appendChild(td1);
+
+        // 2. bounce
+        if (!r.sig) tr.appendChild(checkCell(false, '—', r.lv ? 'Open ' + fmt(r.lv.center) : null, true));
+        else if (!r.lv) tr.appendChild(checkCell(false, 'No PI levels', 'daily candle missing', false));
+        else if (r.bounce) tr.appendChild(checkCell(true, 'Off ' + r.bounce.zone + ' at ' + timeOf(r.bounce.t), zoneText(r.lv, r.bounce.zone)));
+        else tr.appendChild(checkCell(false, 'No zone bounce', 'in last ' + lookbackSel.value + ' candles'));
+
+        // 3. trend
+        const trendTxt = 'ST ' + (r.stTrend === 'BULL' ? '▲' : '▼') + ' · MACD ' + (r.macdTrend === 'BULL' ? '▲' : r.macdTrend === 'BEAR' ? '▼' : 'mixed');
+        tr.appendChild(checkCell(r.c3, trendTxt, r.sig ? (r.c3 ? 'Both agree with ' + r.sig.side : 'Not aligned with ' + r.sig.side) : (r.stTrend === r.macdTrend ? 'Aligned, no signal' : 'Not aligned'), !r.sig));
+
+        // verdict
+        const tdV = el('td');
+        const vText = r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH · 2/3' : r.sig ? '1/3' : 'No setup';
+        tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), vText));
+        if ((r.verdict === 'buy' || r.verdict === 'sell') && prevVerdict[sym] !== undefined && prevVerdict[sym] !== r.verdict) tdV.appendChild(el('span', 'new', 'NEW'));
+        tr.appendChild(tdV);
+
+        tr.appendChild(el('td', r.sig ? null : 'dim', r.trade));
+        const tdL = el('td'); tdL.appendChild(el('div', 'num', fmt(r.ltp))); tdL.appendChild(el('div', 'dim', timeOf(r.lastT) + ' candle')); tr.appendChild(tdL);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody); box.appendChild(table); sec.appendChild(box); host.appendChild(sec);
+    }
+
+    const sum = $('summary'); sum.textContent = '';
+    const chip = (cls, label, n) => { const c = el('span', 'chip ' + cls); c.appendChild(document.createTextNode(label + ' ')); c.appendChild(el('b', null, String(n))); sum.appendChild(c); };
+    if (Object.keys(results).length) {
+      chip('buy', 'Confirmed buy', nBuy);
+      chip('sell', 'Confirmed sell', nSell);
+      chip('warn', 'Watch', nWatch);
+      chip('', 'Stocks with a signal', nSig);
+      if (nErr) chip('sell', 'Not loaded', nErr);
+    }
+  }
+  function zoneText(lv, name) {
+    const z = lv.zones.find((x) => x.name === name);
+    return z ? name + ' ' + fmt(z.lo) + '–' + fmt(z.hi) : '';
+  }
+
+  function reevaluate() {
+    if (!scanned.day) return;
+    const session = { day: scanned.day, cp: scanned.cp };
+    for (const g of groups) for (const s of g.symbols) if (cache[s]) results[s] = evaluate(s, session);
+    render();
+  }
+
+  // ---------- scanning ----------
+  async function scan(reason) {
+    if (busy) return;
+    busy = true;
+    const all = groups.flatMap((g) => g.symbols);
+    let done = 0;
+    const today = nowIst().day;
+    const freshDaily = (s) => !cache[s] || cache[s].dailyFor !== today;
+    setState('scanning', 'Scanning ' + reason + ' · 0/' + all.length);
+    const queue = all.slice();
+    await Promise.all(Array.from({ length: WORKERS }, async () => {
+      while (queue.length) {
+        const s = queue.shift();
+        const fd = freshDaily(s);
+        await fetchSymbol(s, fd);
+        if (cache[s] && !cache[s].error && fd) cache[s].dailyFor = today;
+        done++;
+        setState('scanning', 'Scanning ' + reason + ' · ' + done + '/' + all.length);
+      }
+    }));
+
+    // Decide the session from the first symbol that loaded.
+    const ref = all.find((s) => cache[s] && !cache[s].error && cache[s].bars5 && cache[s].bars5.t.length);
+    if (!ref) {
+      const codes = all.map((s) => (cache[s] && cache[s].error) || 'upstream_error');
+      const banner = $('banner'); banner.hidden = false; banner.textContent = explain(codes[0]);
+      results = {}; for (const s of all) results[s] = { sym: s, error: cache[s] ? cache[s].error : 'upstream_error' };
+      busy = false; render();
+      setState('error', 'Couldn’t load TradingView data', '');
+      return null;
+    }
+    $('banner').hidden = true;
+    const session = pickSession(cache[ref].bars5);
+    prevVerdict = {};
+    for (const s in results) if (results[s] && !results[s].error && scanned.day === session.day) prevVerdict[s] = results[s].verdict;
+    results = {};
+    for (const s of all) results[s] = evaluate(s, session);
+    const newConfirmed = all.some((s) => (results[s].verdict === 'buy' || results[s].verdict === 'sell') && prevVerdict[s] !== undefined && prevVerdict[s] !== results[s].verdict);
+    scanned = { day: session.day, cp: session.cp };
+    sessionLabel = dateLabel(session.day);
+    busy = false;
+    render();
+    paintRail(session.day, session.cp);
+    if (newConfirmed) beep();
+    return session;
+  }
+
+  // One loop every 10 s decides whether a checkpoint is due.
+  async function tick() {
+    if (busy) return;
+    const now = nowIst();
+    const s = now.min * 60 + now.sec;
+    const due = [...CPS].reverse().find((m) => m * 60 + GRACE_SEC <= s && s < (LAST + 5) * 60);
+    const inWindow = now.min >= FIRST && s < LAST * 60 + GRACE_SEC + 60;
+
+    if (inWindow && due == null) {
+      setState('idle', 'First scan at 09:45 IST', 'Waiting for the 09:40 candle to close');
+      return;
+    }
+    if (inWindow && due != null) {
+      if (!(scanned.day === now.day && scanned.cp === due)) {
+        const sess = await scan('the ' + hhmm(due) + ' candle');
+        if (sess && !sess.live) { setState('closed', 'No session today · showing ' + sessionLabel + ' final (11:45)', 'Market closed or holiday'); return; }
+      }
+      if (scanned.day === now.day) {
+        const next = CPS.find((m) => m > scanned.cp);
+        setState(next ? 'live' : 'closed',
+          next ? 'Live · scanned at ' + hhmm(scanned.cp) + ' IST' : 'Scan complete · final 11:45 result',
+          next ? 'Next scan ' + hhmm(next) + ' IST · ' + sessionLabel : sessionLabel + ' · scanning stopped for today');
+      }
+      return;
+    }
+
+    // Outside the window: show the last session's final result once, then stay idle.
+    if (!scanned.day) {
+      const sess = await scan('final 11:45 result');
+      if (!sess) return;
+    }
+    const before = now.min < FIRST;
+    const sameDay = scanned.day === now.day;
+    setState('closed',
+      (sameDay ? 'Scan complete for today' : 'Showing ' + sessionLabel) + ' · final 11:45 result',
+      before ? 'Next scan starts 09:45 IST' : 'Scanning stopped · next scan 09:45 IST on the next trading day');
+  }
+
+  async function boot() {
+    paintRail(null, null);
+    render();
+    mcp = window.claude && window.claude.use ? await window.claude.use('mcp') : null;
+    if (!mcp) {
+      setState('error', 'Open this page on claude.ai to scan', '');
+      const b = $('banner'); b.hidden = false;
+      b.textContent = 'This view can’t reach your TradingView connector. Open the page on claude.ai while signed in, and allow TradingView when asked.';
+      return;
+    }
+    try {
+      groups = await loadWatchlist();
+    } catch (e) {
+      setState('error', 'Couldn’t load the Intraday Top 27 watchlist', '');
+      const b = $('banner'); b.hidden = false; b.textContent = explain(codeOf(e));
+      return;
+    }
+    render();
+    await tick();
+    setInterval(tick, 10000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  }
+  boot();
+})();
+</script>

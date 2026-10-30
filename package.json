@@ -1,0 +1,12 @@
+{
+  "name": "intraday-top27-alerts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scans the Intraday Top 27 list every 5 minutes (09:45-11:45 IST) and posts confirmed ST Momentum + PI LVLS + Dual MACD setups to a Telegram channel.",
+  "main": "src/index.js",
+  "engines": { "node": ">=22.9" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "test": "node --test"
+  }
+}

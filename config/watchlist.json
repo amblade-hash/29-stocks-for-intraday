@@ -1,0 +1,7 @@
+{
+  "name": "Intraday Top 27",
+  "tiers": [
+    { "name": "Tier 1", "symbols": ["INFY", "BHEL", "COFORGE", "BAJFINANCE", "TCS", "HCLTECH", "TVSMOTOR", "SAIL", "HEROMOTOCO", "VEDL", "CHOLAFIN", "RELIANCE", "WIPRO", "DIVISLAB", "BHARTIARTL"] },
+    { "name": "Tier 2", "symbols": ["PFC", "APOLLOHOSP", "BAJAJ-AUTO", "HINDALCO", "HAL", "M&M", "TATASTEEL", "MUTHOOTFIN", "ASHOKLEY", "ZYDUSLIFE", "ABB", "UPL"] }
+  ]
+}
