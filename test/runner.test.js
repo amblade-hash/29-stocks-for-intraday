@@ -182,18 +182,21 @@ test('finishedFor: false before 09:45 on a trading day, true after the 11:45 sum
   assert.strictEqual(createRunner({ provider: mockProvider(), telegram: fakeTelegram(), watchlist, chatId: 'c', stateDir: tmp(), holidays: { 2026: ['2026-10-30'] }, log: () => {} }).finishedFor(at(9 * 60)), true);
 });
 
-test('opening hold: a signal by 09:45 is held through 10:10 and checked normally from 10:15', () => {
+test('opening rule: opening signals are never alerted, the stock is held till 10:15, later signals count', () => {
   const { openingHold } = require('../src/scanner.js');
   const day = TODAY;
   const t = (min) => utcOf(day, min); // candle open time
-  // Signal on the 09:30 candle (closed 09:35): seen at the 09:45 scan -> held.
-  for (const cp of [9 * 60 + 45, 9 * 60 + 50, 10 * 60 + 10]) assert.strictEqual(openingHold('BUY', [t(9 * 60 + 30)], { day, cp }), 'HOLD');
-  assert.strictEqual(openingHold('BUY', [t(9 * 60 + 30)], { day, cp: 10 * 60 + 15 }), 'BUY');
-  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 30)], { day, cp: 11 * 60 }), 'SELL');
-  // Signal on the 09:40 candle closes exactly at 09:45 -> still part of the 09:45 scan -> held.
-  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 40)], { day, cp: 9 * 60 + 50 }), 'HOLD');
-  // First signal on the 09:45 candle (closes 09:50) -> not held.
-  assert.strictEqual(openingHold('BUY', [t(9 * 60 + 45)], { day, cp: 9 * 60 + 50 }), 'BUY');
-  // An early signal holds the stock even if a newer signal appears before 10:15.
-  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 20), t(9 * 60 + 55)], { day, cp: 10 * 60 }), 'HOLD');
+  const at = (cp) => ({ day, cp });
+  // Signal on the 09:30 candle: held 09:45-10:10, then skipped for the rest of the day.
+  for (const cp of [9 * 60 + 45, 9 * 60 + 50, 10 * 60 + 10]) assert.strictEqual(openingHold('BUY', [t(9 * 60 + 30)], at(cp)), 'HOLD');
+  assert.strictEqual(openingHold('BUY', [t(9 * 60 + 30)], at(10 * 60 + 15)), 'OPENING');
+  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 30)], at(11 * 60 + 45)), 'OPENING');
+  // The 09:40 candle closes at 09:45, so it is an opening signal.
+  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 40)], at(10 * 60 + 30)), 'OPENING');
+  // First signal on the 09:45 candle (closes 09:50): normal from the start.
+  assert.strictEqual(openingHold('BUY', [t(9 * 60 + 45)], at(9 * 60 + 50)), 'BUY');
+  // Opening signal, then a new one at 09:55: held till 10:15, then the new signal counts.
+  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 20), t(9 * 60 + 55)], at(10 * 60)), 'HOLD');
+  assert.strictEqual(openingHold('SELL', [t(9 * 60 + 20), t(9 * 60 + 55)], at(10 * 60 + 15)), 'SELL');
+  assert.strictEqual(openingHold('WATCH', [t(9 * 60 + 20), t(10 * 60 + 30)], at(10 * 60 + 35)), 'WATCH');
 });

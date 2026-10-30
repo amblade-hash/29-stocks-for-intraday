@@ -25,10 +25,15 @@ function dailyForSession(daily, bars, dayStart, day) {
   return prev;
 }
 
-// A stock whose first signal came by the 09:45 scan is held (no alert) until the 10:15 scan.
+// Opening rule. A signal that fired by the 09:45 scan (opening candles) is never alerted, and its
+// stock is held until the 10:15 scan; after that only a newer signal (after 09:45) can be alerted.
+// signalTimes: today's signal candle times, oldest first; the last one is the signal being judged.
 function openingHold(verdict, signalTimes, session) {
-  const early = signalTimes.some((t) => t + 300 <= utcOf(session.day, FIRST));
-  return early && session.cp < HOLD_UNTIL ? 'HOLD' : verdict;
+  const cutoff = utcOf(session.day, FIRST);
+  const isOpening = (t) => t + 300 <= cutoff;
+  if (!signalTimes.some(isOpening)) return verdict;
+  if (session.cp < HOLD_UNTIL) return 'HOLD';
+  return isOpening(signalTimes[signalTimes.length - 1]) ? 'OPENING' : verdict;
 }
 
 // bars5 / daily: {t[], o[], h[], l[], c[], v[]}, t = candle open, unix seconds UTC, oldest first.
