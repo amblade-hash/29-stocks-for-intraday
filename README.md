@@ -2,7 +2,7 @@
 
 This repository holds two things: the Telegram alert server (this folder) and the claude.ai dashboard (`dashboard/`).
 
-Scans the Intraday Top 27 list at every 5-minute candle close from **09:45 to 11:45 IST** on weekdays and posts setups to a private Telegram channel. It stops completely after the 11:45 scan, with a closing summary.
+Scans the Intraday Top 27 list at every 5-minute candle close from **09:45 to 11:45 IST** on weekdays and posts confirmed buys and sells to a private Telegram channel; nothing else is posted. It stops completely after the 11:45 scan.
 
 A stock is alerted as **CONFIRMED BUY / SELL** when all three checks pass on the 5-minute chart:
 

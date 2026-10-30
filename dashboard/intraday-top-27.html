@@ -136,7 +136,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <div class="state" id="state" data-mode="idle"><span class="dot"></span><span id="stateText">Starting…</span></div>
       <div class="meta" id="meta">—</div>
     </div>
-    <div class="meta" id="tgStatus">Telegram: confirmed setups and the 11:45 summary go to “Stocks to trade by Bladebot242” during the 09:45–11:45 scans.</div>
+    <div class="meta" id="tgStatus">Telegram: only confirmed buys and sells go to “Stocks to trade by Bladebot242”, during the 09:45–11:45 scans.</div>
     <div>
       <div class="rail" id="rail"></div>
       <div class="rail-labels"><span>09:45</span><span>10:15</span><span>10:45</span><span>11:15</span><span>11:45 IST</span></div>
@@ -157,7 +157,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
-    <p>With Telegram alerts on, each new Confirmed buy or sell is posted to the Telegram channel at the scan that finds it, and the closing summary after the 11:45 scan. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
+    <p>With Telegram alerts on, each new Confirmed buy or sell is posted to the Telegram channel at the scan that finds it. Nothing else is posted. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
   </details>
 </div>
 
@@ -1033,32 +1033,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return lines.join('\n');
   }
 
-  function summaryHtml(day, sent) {
-    const all = groups.flatMap((g) => g.symbols);
-    const parts = [`<b>Intraday Top 27 · scan closed ${esc(dateLabel(day))} 11:45 IST</b>`];
-    const keys = Object.keys(sent).filter((k) => k.includes('|'));
-    if (keys.length) {
-      parts.push(`📨 <b>Alerts sent today (${keys.length})</b>\n` + keys.map((k) => {
-        const [side, sym, t] = k.split('|');
-        const r = results[sym];
-        const now = r && r.sig && String(r.sig.t) === t ? r.trade : r && r.sig ? `replaced by ${r.sig.side} at ${timeOf(r.sig.t)}` : 'no longer active';
-        return `• <b>${esc(short(sym))}</b> ${side} ${timeOf(Number(t))} (alerted ${esc(sent[k])}) · now: ${esc(now)}`;
-      }).join('\n'));
-    }
-    const pick = (v) => all.filter((s) => results[s] && results[s].verdict === v);
-    const line = (s) => { const r = results[s]; return `• <b>${esc(short(s))}</b> ${timeOf(r.sig.t)} · entry ${px(r.tradeObj.entry)}${r.bounce ? ' · ' + r.bounce.zone + ' bounce' : ''}${r.trade !== 'Open' ? ' · ' + esc(r.trade) : ''}`; };
-    const buys = pick('buy'), sells = pick('sell'), watch = pick('watch');
-    parts.push('<b>Status at 11:45</b>');
-    parts.push(`🟢 <b>Confirmed buy (${buys.length})</b>\n${buys.length ? buys.map(line).join('\n') : 'None'}`);
-    parts.push(`🔴 <b>Confirmed sell (${sells.length})</b>\n${sells.length ? sells.map(line).join('\n') : 'None'}`);
-    if (watch.length) parts.push(`🟡 <b>Watch, 2 of 3 (${watch.length})</b>\n${watch.map((s) => `• ${esc(short(s))} ${results[s].sig.side} ${timeOf(results[s].sig.t)}`).join('\n')}`);
-    const failed = all.filter((s) => results[s] && results[s].error);
-    if (failed.length) parts.push('⚠️ Not scanned: ' + failed.map((s) => esc(short(s))).join(', '));
-    parts.push('No more scans today. Next scan 09:45 IST on the next trading day.');
-    parts.push(DISCLAIMER);
-    return parts.join('\n\n');
-  }
-
   async function tgSend(html) {
     const r = await mcp.callTool(ZAPIER, 'execute_zapier_write_action', {
       selected_api: 'TelegramCLIAPI', action: 'send_message', tool_name: 'telegram_send_message',
@@ -1084,7 +1058,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
   }
 
-  // Posts new Confirmed setups found by this scan, and the summary after 11:45.
+  // Posts new Confirmed buys and sells found by this scan. Nothing else goes to Telegram.
   // Only during the live window, so opening the page later in the day never posts stale alerts.
   async function notifyTelegram(session) {
     const now = nowIst();
@@ -1104,13 +1078,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         for (const f of fresh) sent[f.key] = hhmm(session.cp);
         saveSent(session.day, sent);
       }
-      if (session.cp === LAST && !sent._summary) {
-        await tgSend(summaryHtml(session.day, sent));
-        sent._summary = true;
-        saveSent(session.day, sent);
-      }
       const n = Object.keys(sent).filter((k) => k.includes('|')).length;
-      tgStatus.textContent = 'Telegram: ' + n + ' alert' + (n === 1 ? '' : 's') + ' sent today' + (fresh.length ? ' · last at ' + hhmm(session.cp) + ' IST' : '') + (sent._summary ? ' · summary sent' : '');
+      tgStatus.textContent = 'Telegram: ' + n + ' alert' + (n === 1 ? '' : 's') + ' sent today' + (fresh.length ? ' · last at ' + hhmm(session.cp) + ' IST' : '');
     } catch (e) {
       tgStatus.textContent = 'Telegram: ' + tgExplain(e);
     }

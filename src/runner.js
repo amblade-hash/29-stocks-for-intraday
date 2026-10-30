@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { evaluate } = require('./scanner.js');
-const { alertMessage, summaryMessage } = require('./messages.js');
+const { alertMessage } = require('./messages.js');
 const { LAST, FIRST, nowIst, dueCheckpoint, dateOf, hhmm } = require('./time.js');
 
 function createRunner({ provider, telegram, watchlist, chatId, adminChatId, stateDir, graceSec = 20, lookback = 6, alertWatch = false, holidays = {}, log = console.log }) {
@@ -113,8 +113,7 @@ function createRunner({ provider, telegram, watchlist, chatId, adminChatId, stat
         // No candles for today by 10:00: market holiday.
         if (due >= FIRST + 15 && state.emptyScans >= 3) { state.holiday = true; log('no session today, stopping'); }
       } else if (due === LAST) {
-        await telegram.send(chatId, summaryMessage(out.results, dateOf(now.day), state.alerted));
-        state.done = true;
+        state.done = true; // only confirmed buys and sells are posted; no closing summary
       }
       saveState();
     } catch (e) {
