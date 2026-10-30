@@ -3,7 +3,9 @@
 const STMomentum = require('./engine/stMomentum.js');
 const DualMACD = require('./engine/dualMacd.js');
 const PILevels = require('./engine/piLevels.js');
-const { dayOf, utcOf } = require('./time.js');
+const { dayOf, utcOf, FIRST } = require('./time.js');
+
+const HOLD_UNTIL = 10 * 60 + 15; // stocks with a signal by 09:45 are held until this scan
 
 const slice = (b, n) => ({ t: b.t.slice(0, n), o: b.o.slice(0, n), h: b.h.slice(0, n), l: b.l.slice(0, n), c: b.c.slice(0, n), v: b.v.slice(0, n) });
 
@@ -21,6 +23,12 @@ function dailyForSession(daily, bars, dayStart, day) {
   prev.l.push(bars.l[dayStart]);
   prev.c.push(bars.c[dayStart]);
   return prev;
+}
+
+// A stock whose first signal came by the 09:45 scan is held (no alert) until the 10:15 scan.
+function openingHold(verdict, signalTimes, session) {
+  const early = signalTimes.some((t) => t + 300 <= utcOf(session.day, FIRST));
+  return early && session.cp < HOLD_UNTIL ? 'HOLD' : verdict;
 }
 
 // bars5 / daily: {t[], o[], h[], l[], c[], v[]}, t = candle open, unix seconds UTC, oldest first.
@@ -46,7 +54,9 @@ function evaluate(bars5, daily, session, lookback = 6) {
   const c2 = !!bounce;
   const c3 = !!sig && stTrend === want && macdTrend === want;
   const passes = c1 + c2 + c3;
-  const verdict = sig && passes === 3 ? sig.side : sig && passes === 2 ? 'WATCH' : 'NONE';
+  let verdict = sig && passes === 3 ? sig.side : sig && passes === 2 ? 'WATCH' : 'NONE';
+  // A stock that already had a signal by the 09:45 scan (opening candles) is held until the 10:15 scan.
+  verdict = openingHold(verdict, sigs.map((x) => x.t), session);
 
   let trade = null;
   if (sig) {
@@ -65,4 +75,4 @@ function evaluate(bars5, daily, session, lookback = 6) {
   };
 }
 
-module.exports = { evaluate, dailyForSession };
+module.exports = { evaluate, dailyForSession, openingHold, HOLD_UNTIL };
