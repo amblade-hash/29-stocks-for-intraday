@@ -201,14 +201,19 @@ test('opening rule: opening signals are never alerted, the stock is held till 10
   assert.strictEqual(openingHold('WATCH', [t(9 * 60 + 20), t(10 * 60 + 30)], at(10 * 60 + 35)), 'WATCH');
 });
 
-test('Dual MACD trend follows the fast MACD against its signal line', () => {
+test('Dual MACD trend needs fast MACD, histogram and EMA 9/21 to agree', () => {
   const D = require('../src/engine/dualMacd.js');
   const d = JSON.parse(fs.readFileSync(path.join(__dirname, 'nifty15.json'), 'utf8'));
   const r = D.compute({ c: d.c });
+  let histDisagrees = 0;
   for (let i = 300; i < d.c.length; i++) {
-    const want = r.macd1[i] > r.signal1[i] ? 'BULL' : r.macd1[i] < r.signal1[i] ? 'BEAR' : 'MIXED';
-    assert.strictEqual(r.trend[i], want, 'slow histogram and EMAs do not change the trend');
+    const fast = r.macd1[i] > r.signal1[i] ? 1 : -1, hist = r.hist2[i] > 0 ? 1 : -1, ema = r.ema9[i] > r.ema21[i] ? 1 : -1;
+    const want = fast + hist + ema === 3 ? 'BULL' : fast + hist + ema === -3 ? 'BEAR' : 'MIXED';
+    assert.strictEqual(r.trend[i], want);
+    // The HAL case: fast MACD and EMAs point down but the histogram is green.
+    if (fast === -1 && ema === -1 && hist === 1) { histDisagrees++; assert.strictEqual(r.trend[i], 'MIXED'); }
   }
+  assert.ok(histDisagrees > 0, 'data includes candles where only the histogram disagrees');
 });
 
 test('check 3 is judged on the signal candle, not the latest candle', () => {

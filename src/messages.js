@@ -18,7 +18,7 @@ function setupBlock(row) {
     head,
     `${r.c1 ? '✅' : '❌'} ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(s.entry)}`,
     r.bounce ? `✅ Bounced off PI ${r.bounce.zone} (${px(r.bounce.lo)}–${px(r.bounce.hi)}) at ${timeOf(r.bounce.t)}` : '❌ No PI zone bounce before the signal',
-    `${r.c3 ? '✅' : '❌'} At the signal candle: Supertrend ${arrow(r.stTrend)} · fast MACD ${r.macdTrend === 'BULL' ? 'above' : r.macdTrend === 'BEAR' ? 'below' : 'on'} its signal line`,
+    `${r.c3 ? '✅' : '❌'} At the signal candle: Supertrend ${arrow(r.stTrend)} · Dual MACD fast ${partArrow(r.macdParts.fast)} histogram ${partArrow(r.macdParts.slow)} EMA 9/21 ${partArrow(r.macdParts.ema)}`,
     `Targets 1:1 ${px(s.t1)} · 1:1.5 ${px(s.t2)} · 1:2 ${px(s.t3)} · SL: candle close through Supertrend`,
   ];
   if (r.trade && r.trade !== 'Open') lines.push(`Trade so far: ${esc(r.trade)}`);

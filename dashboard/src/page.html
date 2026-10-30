@@ -153,7 +153,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     <ol>
       <li><b>ST Momentum signal</b> — the latest fresh BUY or SELL from ST Momentum Signals today (Supertrend direction + ADX &gt; 20 + RSI &gt; 55 / &lt; 45 + Stoch RSI %K &gt; 60 / &lt; 40), on closed 5-minute candles.</li>
       <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
-      <li><b>Trend match</b> — on the signal candle, Supertrend points the signal's way and the Dual MACD Pro fast MACD (8/13) is above its signal line (9) for a BUY, below it for a SELL. The slow histogram and EMA 9/21 are shown for information only.</li>
+      <li><b>Trend match</b> — on the signal candle, Supertrend points the signal's way and all three Dual MACD Pro parts agree with it: fast MACD (8/13) above its signal line (9), slow histogram green and EMA 9 above EMA 21 for a BUY; the opposite for a SELL.</li>
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
@@ -420,7 +420,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       const box = el('div', 'tablebox');
       const table = el('table');
       const thead = el('thead'); const hr = el('tr');
-      const heads = [['Stock', ''], ['① ST Momentum', 'latest signal today'], ['② PI LVLS', 'zone bounce'], ['③ Trend', 'Supertrend / fast MACD'], ['Verdict', ''], ['Trade', 'since signal'], ['LTP', 'last closed candle']];
+      const heads = [['Stock', ''], ['① ST Momentum', 'latest signal today'], ['② PI LVLS', 'zone bounce'], ['③ Trend', 'Supertrend / Dual MACD'], ['Verdict', ''], ['Trade', 'since signal'], ['LTP', 'last closed candle']];
       for (const [h, s] of heads) { const th = el('th', null, h); if (s) th.appendChild(el('small', null, s)); hr.appendChild(th); }
       thead.appendChild(hr); table.appendChild(thead);
       const tbody = el('tbody');
@@ -467,9 +467,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
         // 3. trend
         const pa = (d) => (d === 'UP' ? '▲' : d === 'DOWN' ? '▼' : '–');
-        const trendTxt = 'ST ' + (r.stTrend === 'BULL' ? '▲' : '▼') + ' · Fast MACD ' + pa(r.macdParts.fast);
+        const trendTxt = 'ST ' + (r.stTrend === 'BULL' ? '▲' : '▼') + ' · MACD ' + (r.macdTrend === 'BULL' ? '▲' : r.macdTrend === 'BEAR' ? '▼' : 'mixed');
         const where = r.sig ? 'At signal ' + timeOf(r.sig.t) : 'Latest candle';
-        const trendSub = where + ' · info: Slow ' + pa(r.macdParts.slow) + ' · EMA ' + pa(r.macdParts.ema);
+        const trendSub = where + ' · Fast ' + pa(r.macdParts.fast) + ' · Histogram ' + pa(r.macdParts.slow) + ' · EMA ' + pa(r.macdParts.ema);
         tr.appendChild(checkCell(r.c3, trendTxt, trendSub, !r.sig));
 
         // verdict
@@ -572,7 +572,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       `${buy ? '🟢' : '🔴'} <b>CONFIRMED ${s.side} · ${esc(short(sym))}</b> (${esc(tierOf(sym))})`,
       `✅ ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(tr.entry)}`,
       `✅ Bounced off PI ${r.bounce.zone} (${px(z.lo)}–${px(z.hi)}) at ${timeOf(r.bounce.t)}`,
-      `✅ At the signal candle: Supertrend ${arrow(r.stTrend)} · fast MACD ${buy ? 'above' : 'below'} its signal line`,
+      `✅ At the signal candle: Supertrend ${arrow(r.stTrend)} · Dual MACD fast ${arrow(r.stTrend)} histogram ${arrow(r.stTrend)} EMA 9/21 ${arrow(r.stTrend)}`,
       `Targets 1:1 ${px(tr.t1)} · 1:1.5 ${px(tr.t2)} · 1:2 ${px(tr.t3)} · SL: candle close through Supertrend`,
     ];
     if (r.trade && r.trade !== 'Open') lines.push('Trade so far: ' + esc(r.trade));
