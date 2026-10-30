@@ -1,0 +1,46 @@
+name: Intraday Top 27 alerts
+
+on:
+  schedule:
+    # GitHub schedules are in UTC. 03:30 UTC = 09:00 IST, Monday to Friday.
+    - cron: '30 3 * * 1-5'
+    # Backup start at 09:20 IST in case GitHub drops the first run. If the first run
+    # already covered the morning, this one starts after it finishes (past 11:40) and exits.
+    - cron: '50 3 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to run'
+        type: choice
+        options:
+          - test-message
+          - scan-now
+        default: test-message
+
+concurrency:
+  group: intraday-scanner
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID || '-1003899528123' }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+      ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+      ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+      ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Send a test message to the channel
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test-message'
+        run: node src/index.js --test-message
+      - name: Scan this morning (09:45-11:45 IST), then stop
+        if: github.event_name == 'schedule' || inputs.mode == 'scan-now'
+        run: node src/index.js --session

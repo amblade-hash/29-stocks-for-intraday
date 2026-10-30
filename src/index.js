@@ -54,6 +54,25 @@ async function findChats() {
   for (const [id, name] of chats) console.log(`${id}  ${name}`);
 }
 
+// One trading morning, then exit (used by the GitHub Actions schedule).
+async function runSession() {
+  const { nowIst } = require('./time.js');
+  const now = nowIst();
+  if (now.secOfDay > (11 * 60 + 40) * 60) {
+    console.log('Started after 11:40 IST: today\'s scan window is over (or another run covered it). Nothing to do.');
+    return;
+  }
+  if (runner.finishedFor()) { console.log('Weekend or NSE holiday: no scan today.'); return; }
+  console.log('Session started; scanning 09:45-11:45 IST, then exiting.');
+  for (;;) {
+    await runner.tick().catch((e) => console.error('tick failed:', e));
+    if (runner.finishedFor()) break;
+    await new Promise((r) => setTimeout(r, 10000));
+  }
+  const st = runner.getState();
+  console.log(`Session finished${st ? `: last scan ${st.lastCp != null ? require('./time.js').hhmm(st.lastCp) : 'none'}, alerts sent ${Object.keys(st.alerted).length}${st.holiday ? ', market closed today' : ''}` : ''}.`);
+}
+
 async function main() {
   if (process.argv.includes('--find-chat')) return findChats();
   if (process.argv.includes('--test-message')) {
@@ -61,6 +80,7 @@ async function main() {
     console.log('Test message sent.');
     return;
   }
+  if (process.argv.includes('--session')) return runSession();
   console.log(`Intraday Top 27 alerts running: ${watchlist.tiers.reduce((n, t) => n + t.symbols.length, 0)} stocks, data from ${provider.name}, scans 09:45-11:45 IST, Monday to Friday, skipping NSE holidays.`);
   await runner.tick();
   setInterval(() => runner.tick().catch((e) => console.error('tick failed:', e)), 10000);

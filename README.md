@@ -32,7 +32,19 @@ For error notices (login failures, outages) send `/start` to your bot from your 
 
 The bot only reads candles. It never places orders.
 
-### 3. Run
+### 3. Run it free on GitHub Actions (recommended)
+
+The workflow in `.github/workflows/scanner.yml` starts at 09:00 IST every weekday (backup start at 09:20), scans 09:45-11:45, posts the summary and exits. Nothing runs on weekends or NSE holidays. The repository must be **public** for this to be free at ~3 hours a day; your keys stay private in GitHub Secrets.
+
+1. Repository **Settings → Secrets and variables → Actions → New repository secret**, add:
+   `TELEGRAM_BOT_TOKEN`, `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_PIN`, `ANGEL_TOTP_SECRET` (optional: `TELEGRAM_ADMIN_CHAT_ID`).
+   The channel ID is already in the workflow; to use another channel add a **variable** `TELEGRAM_CHAT_ID`.
+2. **Actions** tab → *Intraday Top 27 alerts* → **Run workflow** → `test-message`. The channel should get "✅ connected".
+3. That's it: the schedule runs by itself. Each morning's log is under the Actions tab.
+
+GitHub can start scheduled runs 10-30 minutes late, which is why it starts at 09:00. It pauses schedules on repositories with no commits for 60 days and emails you first; click "Enable workflow" in the Actions tab to resume.
+
+### 4. Or run it on your own server
 
 ```bash
 npm start

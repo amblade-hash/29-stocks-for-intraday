@@ -173,3 +173,11 @@ test('a year with no holiday list still scans and tells the admin once', async (
   assert.strictEqual(provider.calls.five, 50);
   assert.strictEqual(tg.sent.filter((m) => m.chat === 'admin' && /holiday list/.test(m.text)).length, 1);
 });
+
+test('finishedFor: false before 09:45 on a trading day, true after the 11:45 summary', async () => {
+  const runner = createRunner({ provider: mockProvider(), telegram: fakeTelegram(), watchlist, chatId: 'c', stateDir: tmp(), holidays: { 2026: [] }, log: () => {} });
+  assert.strictEqual(runner.finishedFor(at(9 * 60)), false);
+  await runDay(runner);
+  assert.strictEqual(runner.finishedFor(at(11 * 60 + 46)), true);
+  assert.strictEqual(createRunner({ provider: mockProvider(), telegram: fakeTelegram(), watchlist, chatId: 'c', stateDir: tmp(), holidays: { 2026: ['2026-10-30'] }, log: () => {} }).finishedFor(at(9 * 60)), true);
+});

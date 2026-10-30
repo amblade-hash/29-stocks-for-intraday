@@ -126,7 +126,18 @@ function createRunner({ provider, telegram, watchlist, chatId, adminChatId, stat
     }
   }
 
-  return { tick, runCheckpoint, getState: () => state };
+  // True once there is nothing left to do today: weekend, NSE holiday, 11:45 done, or past 11:55.
+  function finishedFor(ms = Date.now()) {
+    const now = nowIst(ms);
+    if (now.weekday === 0 || now.weekday === 6) return true;
+    const date = dateOf(now.day);
+    const yearList = holidays[date.slice(0, 4)];
+    if (yearList && yearList.includes(date)) return true;
+    if (state && state.day === now.day && (state.done || state.holiday)) return true;
+    return now.secOfDay > (LAST + 10) * 60;
+  }
+
+  return { tick, runCheckpoint, finishedFor, getState: () => state };
 }
 
 module.exports = { createRunner };
