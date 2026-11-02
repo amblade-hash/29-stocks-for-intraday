@@ -626,6 +626,15 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const BARS_5M = 1200;            // ~16 sessions: enough warm-up for the 500-bar KER rank and EMA 200
   const BARS_1D = 40;
   const SCAN_BUDGET_MS = 150000;    // a scan stops fetching after 2.5 minutes
+  const HISTORY_BARS = 1900;        // ~25 sessions of 5-minute candles: indicator warm-up + 22 days for PI LVLS
+  const DAILY_CALL_BUDGET = 120;    // never make more TradingView requests than this in a day
+  // Latest-candle columns for the one-request-per-scan update. 'prev' reads the candle that just closed
+  // (fetched after the close); 'live' reads the forming candle a few seconds before it closes.
+  const CANDLE_COLS = {
+    prev: ['open[1]|5', 'high[1]|5', 'low[1]|5', 'close[1]|5', 'volume[1]|5'],
+    live: ['open|5', 'high|5', 'low|5', 'close|5', 'volume|5'],
+  };
+  const LIVE_LEAD_SEC = 20;          // 'live' mode reads the forming candle 10-20 s before it closes (ticks are 10 s apart)
   const WORKERS = 2;               // parallel TradingView requests; more tends to time out
   const CPS = []; for (let m = FIRST; m <= LAST; m += STEP) CPS.push(m);
 
@@ -716,8 +725,12 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     store.set('tvBlockedUntil', String(nextUtcMidnight));
   }
 
+  // Hard cap on TradingView requests per day (a normal morning needs about 55).
+  const callsToday = () => Number(store.get('tvCalls-' + nowIst().day, '0')) || 0;
   async function call(tool, input, retried) {
     if (Date.now() < blockedUntil()) throw { code: 'tv_suspended' };
+    if (callsToday() >= DAILY_CALL_BUDGET) throw { code: 'tv_budget' };
+    store.set('tvCalls-' + nowIst().day, String(callsToday() + 1));
     try {
       // 25 s per request: a hung request must not hold up the scan (it is retried once below).
       const r = await mcp.callTool(SERVER, tool, input, { cache: false, signal: AbortSignal.timeout(25000) });
@@ -725,7 +738,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     } catch (e) {
       if (isQuotaError(e)) { blockTradingView(); throw { code: 'tv_suspended' }; }
       // These are read-only calls, so any failure that isn't a permission/connection problem is retried once.
-      const final = ['tv_suspended', 'needs_reauth', 'server_not_connected', 'not_in_manifest', 'approval_required', 'not_granted', 'consent_required', 'blocked_by_policy', 'selection_required', 'bad_request', 'user_changed'];
+      const final = ['tv_suspended', 'tv_budget', 'needs_reauth', 'server_not_connected', 'not_in_manifest', 'approval_required', 'not_granted', 'consent_required', 'blocked_by_policy', 'selection_required', 'bad_request', 'user_changed'];
       if (!retried && e && !final.includes(e.code)) {
         await new Promise((res) => setTimeout(res, Math.min(e.retryAfterMs || 0, 60000) + 1000 + Math.random() * 2000));
         return call(tool, input, true);
@@ -744,6 +757,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       case 'selection_required': return 'You have more than one TradingView connector. Choose one in the prompt claude.ai shows, then reload.';
       case 'blocked_by_policy': return 'Your organization’s policy blocks TradingView for this page.';
       case 'tv_suspended': return 'TradingView has suspended connector access for this account until 05:30 IST because of the number of requests. Scanning is stopped until then to avoid a longer suspension.';
+      case 'tv_budget': return 'This page has used its daily limit of ' + DAILY_CALL_BUDGET + ' TradingView requests, so it has stopped scanning for today to protect your account. It starts again tomorrow.';
+      case 'tv_batch': return 'TradingView didn’t return the latest candles for all stocks in one request, so this scan was skipped. The next scan tries again.';
       case 'server_unavailable': return 'TradingView didn’t answer in time. The next scan will try again.';
       default: return 'TradingView returned an error. The next scan will try again.';
     }
@@ -770,34 +785,120 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   };
   const slice = (b, n) => ({ t: b.t.slice(0, n), o: b.o.slice(0, n), h: b.h.slice(0, n), l: b.l.slice(0, n), c: b.c.slice(0, n), v: b.v.slice(0, n) });
 
-  // Out of time this scan: keep the last good candles (shown as not refreshed) instead of waiting.
-  function markNotRefreshed(sym) {
-    const entry = cache[sym] || (cache[sym] = {});
-    entry.lastError = 'scan_timeout';
-    if (entry.bars5 && entry.bars5.t && entry.bars5.t.length) entry.stale = true;
-    else entry.error = 'scan_timeout';
+  let candleMode = store.get('candleMode', 'prev') === 'live' ? 'live' : 'prev';
+
+  // Browser database for the day's candle history, so a reload or republish costs no requests.
+  function idb() {
+    return new Promise((res, rej) => {
+      try {
+        const req = indexedDB.open('top27', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('kv');
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      } catch (e) { rej(e); }
+    });
+  }
+  async function idbGet(key) {
+    try { const db = await idb(); return await new Promise((res) => { const r = db.transaction('kv').objectStore('kv').get(key); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); }); } catch (e) { return undefined; }
+  }
+  async function idbSet(key, val) {
+    try { const db = await idb(); await new Promise((res) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(val, key); tx.oncomplete = res; tx.onerror = res; }); } catch (e) {}
+  }
+  async function saveHistory(day) {
+    const data = {};
+    for (const s in cache) if (cache[s] && cache[s].histDay === day && cache[s].bars5) data[s] = cache[s].bars5;
+    await idbSet('history', { day, data });
+  }
+  async function restoreHistory(day) {
+    const h = await idbGet('history');
+    if (!h || h.day !== day || !h.data) return;
+    for (const s in h.data) {
+      const entry = cache[s] || (cache[s] = {});
+      if (entry.histDay === day) continue;
+      entry.bars5 = h.data[s]; entry.daily = dailyFrom5m(entry.bars5); entry.histDay = day; entry.error = null; entry.stale = false;
+    }
   }
 
-  async function fetchSymbol(sym, wantDaily) {
+  // Daily candles for PI LVLS, built from the 5-minute history (no separate daily request).
+  function dailyFrom5m(b) {
+    const d = { t: [], o: [], h: [], l: [], c: [], v: [] };
+    for (let k = 0; k < b.t.length; k++) {
+      const day = dayOf(b.t[k]);
+      const last = d.t.length - 1;
+      if (last < 0 || dayOf(d.t[last]) !== day) { d.t.push(utcOf(day, 9 * 60 + 15)); d.o.push(b.o[k]); d.h.push(b.h[k]); d.l.push(b.l[k]); d.c.push(b.c[k]); d.v.push(b.v[k] || 0); }
+      else { d.h[last] = Math.max(d.h[last], b.h[k]); d.l[last] = Math.min(d.l[last], b.l[k]); d.c[last] = b.c[k]; d.v[last] += b.v[k] || 0; }
+    }
+    return d;
+  }
+  // Drop the candle that is still forming.
+  const closedOnly = (b) => { const now = Date.now() / 1000; let n = b.t.length; while (n && b.t[n - 1] + 300 > now) n--; return slice(b, n); };
+
+  // Out of time this scan: keep the last good candles (shown as not refreshed) instead of waiting.
+  function markNotRefreshed(sym, code) {
+    const entry = cache[sym] || (cache[sym] = {});
+    entry.lastError = code || 'scan_timeout';
+    if (entry.bars5 && entry.bars5.t && entry.bars5.t.length) entry.stale = true;
+    else entry.error = entry.lastError;
+  }
+
+  // One request per stock, once a day: the 5-minute history.
+  async function loadHistory(sym, day) {
     const entry = cache[sym] || (cache[sym] = {});
     try {
-      const p5 = await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '5m', count: BARS_5M, format: 'columns' });
-      const b5 = toBars(p5);
+      const b5 = toBars(await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '5m', count: HISTORY_BARS, format: 'columns' }));
       if (!b5 || !b5.t || !b5.t.length) throw { code: 'no_data' };
-      if (wantDaily || !entry.daily) {
-        const pd = await call('mcp-tv-get-ohlcv', { symbol: sym, interval: '1D', count: BARS_1D, format: 'columns' });
-        entry.daily = toBars(pd);
-      }
-      entry.bars5 = b5;
-      entry.error = null;
-      entry.stale = false;
+      entry.bars5 = closedOnly(b5);
+      entry.daily = dailyFrom5m(entry.bars5);
+      entry.histDay = day; entry.needsHistory = false; entry.error = null; entry.stale = false;
       return true;
     } catch (e) {
-      entry.lastError = codeOf(e);
-      // Keep the last good candles (marked stale) rather than dropping the stock from the table.
-      if (entry.bars5 && entry.bars5.t && entry.bars5.t.length) entry.stale = true;
-      else entry.error = entry.lastError;
+      markNotRefreshed(sym, codeOf(e));
       return false;
+    }
+  }
+
+  // Reads one candle per stock from a batch answer. The answer's exact shape is checked defensively.
+  function parseBatch(p, cols) {
+    const out = {};
+    const num = (x) => (typeof x === 'number' ? x : typeof x === 'string' && x.trim() !== '' && !isNaN(+x) ? +x : null);
+    const take = (sym, vals) => {
+      if (!sym || vals == null) return;
+      const get = (c, k) => (Array.isArray(vals) ? vals[k] : vals[c]);
+      const [o, h, l, c, v] = cols.map((col, k) => num(get(col, k)));
+      if ([o, h, l, c].every((x) => x != null)) out[sym] = { o, h, l, c, v: v || 0 };
+    };
+    const list = Array.isArray(p) ? p : p && (p.data || p.results || p.rows || p.items || p.symbols || p.quotes);
+    if (Array.isArray(list)) {
+      for (const it of list) {
+        if (!it || typeof it !== 'object') continue;
+        const sym = it.symbol || it.s || it.ticker || it.full_name;
+        take(sym, it.columns || it.values || it.d || it.data || it);
+      }
+    } else if (list && typeof list === 'object') {
+      for (const sym of Object.keys(list)) take(sym, list[sym]);
+    }
+    return out;
+  }
+
+  // One request for every stock: append the candle that opened at candleT.
+  async function appendLatest(syms, candleT) {
+    const cols = CANDLE_COLS[candleMode];
+    const got = parseBatch(await call('mcp-tv-get-symbol-data-batch', { symbols: syms, columns: cols }), cols);
+    if (!Object.keys(got).length) {
+      // 'prev' columns not supported: read the forming candle just before it closes from the next scan on.
+      if (candleMode === 'prev') { candleMode = 'live'; store.set('candleMode', 'live'); }
+      throw { code: 'tv_batch' };
+    }
+    for (const s of syms) {
+      const entry = cache[s], x = got[s];
+      if (!entry || !entry.bars5) continue;
+      if (!x) { markNotRefreshed(s, 'tv_batch'); continue; }
+      const b = entry.bars5, last = b.t[b.t.length - 1];
+      if (last >= candleT) continue;
+      if (last < candleT - 300) { entry.needsHistory = true; markNotRefreshed(s, 'gap'); continue; }
+      b.t.push(candleT); b.o.push(x.o); b.h.push(x.h); b.l.push(x.l); b.c.push(x.c); b.v.push(x.v);
+      entry.daily = dailyFrom5m(b);
+      entry.stale = false; entry.error = null;
     }
   }
 
@@ -1056,11 +1157,11 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
   // ---------- scanning ----------
   // Always clears the busy flag, so one failed scan can never stop the scans after it.
-  async function scan(reason) {
+  async function scan(cp) {
     if (busy) return null;
     busy = true;
     try {
-      return await scanOnce(reason);
+      return await scanOnce(cp);
     } catch (e) {
       console.error('scan failed', e);
       setState('error', 'Scan failed: ' + (e && e.message ? e.message : 'unknown error') + ' · next scan retries', '');
@@ -1070,73 +1171,85 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
   }
 
-  async function scanOnce(reason) {
+  // One live scan at checkpoint `cp` (minutes since midnight IST) of today.
+  async function scanOnce(cp) {
     if (Date.now() < blockedUntil()) {
       const b = $('banner'); b.hidden = false; b.textContent = explain('tv_suspended');
       setState('error', 'Stopped: TradingView access suspended until 05:30 IST', '');
       return null;
     }
     const all = groups.flatMap((g) => g.symbols);
-    let done = 0;
     const today = nowIst().day;
-    const freshDaily = (s) => !cache[s] || cache[s].dailyFor !== today;
-    const startedAt = Date.now();
     const started = hhmm(nowIst().min) + ':' + String(Math.floor(nowIst().sec)).padStart(2, '0');
-    const deadline = startedAt + SCAN_BUDGET_MS; // finish well before the next 5-minute scan
+    const deadline = Date.now() + SCAN_BUDGET_MS;
     const label = (txt) => setState('scanning', txt + ' · started ' + started);
-    label('Scanning ' + reason + ' · 0/' + all.length);
-    const queue = all.slice();
+    const isPaused = (s) => results[s] && results[s].paused && scanned.day === today && cp < PAUSE_UNTIL;
+
+    // 1. History: once a day per stock (restored from the browser when possible).
+    await restoreHistory(today);
+    const need = all.filter((s) => !isPaused(s) && (!cache[s] || cache[s].histDay !== today || cache[s].needsHistory));
+    let done = 0;
+    const queue = need.slice();
+    if (need.length) label('Loading today’s history · 0/' + need.length);
     await Promise.all(Array.from({ length: WORKERS }, async () => {
       while (queue.length) {
         const s = queue.shift();
-        const prev = results[s];
-        const nowMin = nowIst().min;
-        // Paused stocks are not fetched until 10:45; their frozen result is rebuilt from the cached candles.
-        if (prev && prev.paused && scanned.day === today && nowMin < PAUSE_UNTIL && cache[s] && cache[s].bars5) { done++; continue; }
-        if (Date.now() > deadline || Date.now() < blockedUntil()) { markNotRefreshed(s); done++; continue; }
-        const fd = freshDaily(s);
-        if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
-        done++;
-        label('Scanning ' + reason + ' · ' + done + '/' + all.length);
+        if (Date.now() > deadline || Date.now() < blockedUntil() || callsToday() >= DAILY_CALL_BUDGET) { markNotRefreshed(s, callsToday() >= DAILY_CALL_BUDGET ? 'tv_budget' : 'scan_timeout'); continue; }
+        await loadHistory(s, today);
+        label('Loading today’s history · ' + (++done) + '/' + need.length);
       }
     }));
-    // Second attempt, one at a time, for any stock that failed in the first pass.
-    const failed = all.filter((s) => cache[s] && (cache[s].error || cache[s].stale));
-    for (let k = 0; k < failed.length; k++) {
-      const s = failed[k];
-      if (Date.now() > deadline || Date.now() < blockedUntil()) break;
-      label('Retrying ' + failed.length + ' stock' + (failed.length === 1 ? '' : 's') + ' · ' + (k + 1) + '/' + failed.length);
-      await new Promise((res) => setTimeout(res, 1500));
-      const fd = freshDaily(s);
-      if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
+    if (need.length) await saveHistory(today);
+
+    // 2. Latest candle: one request for every stock still missing it.
+    const candleT = utcOf(today, cp) - 300;
+    // Paused stocks are included so their history stays complete (they are still not re-evaluated).
+    const behind = all.filter((s) => cache[s] && cache[s].bars5 && cache[s].histDay === today && cache[s].bars5.t[cache[s].bars5.t.length - 1] < candleT);
+    let batchError = null;
+    // In 'live' mode the candle must be read before it closes; too late, and the next candle would be read instead.
+    const tooLate = candleMode === 'live' && (nowIst().min * 60 + nowIst().sec) > cp * 60 - 3;
+    if (tooLate) { batchError = 'tv_batch'; for (const s of behind) markNotRefreshed(s, 'tv_batch'); }
+    else if (behind.length && Date.now() < deadline) {
+      label('Reading the ' + hhmm(cp) + ' candle for ' + behind.length + ' stocks');
+      try { await appendLatest(behind, candleT); await saveHistory(today); }
+      catch (e) { batchError = codeOf(e); for (const s of behind) markNotRefreshed(s, batchError); }
     }
 
-    // Decide the session from the first symbol that loaded.
-    const ref = all.find((s) => cache[s] && !cache[s].error && !cache[s].stale && cache[s].bars5 && cache[s].bars5.t.length)
-      || all.find((s) => cache[s] && !cache[s].error && cache[s].bars5 && cache[s].bars5.t.length);
-    if (!ref) {
-      const codes = all.map((s) => (cache[s] && cache[s].error) || 'upstream_error');
-      const banner = $('banner'); banner.hidden = false; banner.textContent = explain(codes[0]);
-      results = {}; for (const s of all) results[s] = { sym: s, error: cache[s] ? cache[s].error : 'upstream_error' };
-      busy = false; render();
-      setState('error', 'Couldn’t load TradingView data', '');
-      return null;
-    }
-    $('banner').hidden = true;
-    const session = pickSession(cache[ref].bars5);
+    // 3. Evaluate.
+    const session = { day: today, cp, live: true };
     prevVerdict = {};
-    for (const s in results) if (results[s] && !results[s].error && scanned.day === session.day) prevVerdict[s] = results[s].verdict;
+    for (const s in results) if (results[s] && !results[s].error && scanned.day === today) prevVerdict[s] = results[s].verdict;
     results = {};
     for (const s of all) results[s] = evaluate(s, session);
+    const loaded = all.filter((s) => !results[s].error);
+    const banner = $('banner');
+    const fatal = ['tv_suspended', 'tv_budget'].find((c) => all.some((s) => cache[s] && cache[s].lastError === c));
+    if (fatal) { banner.hidden = false; banner.textContent = explain(fatal); }
+    else if (batchError) { banner.hidden = false; banner.textContent = explain(batchError); }
+    else if (!loaded.length) { banner.hidden = false; banner.textContent = all.every((s) => results[s].error === 'no_session') ? 'No candles for today from TradingView: the market looks closed (holiday).' : explain((cache[all[0]] && cache[all[0]].lastError) || 'upstream_error'); }
+    else banner.hidden = true;
+    if (all.every((s) => results[s].error === 'no_session') && cp >= FIRST + 15) store.set('holiday-' + today, '1');
+
     const newConfirmed = all.some((s) => (results[s].verdict === 'buy' || results[s].verdict === 'sell') && prevVerdict[s] !== undefined && prevVerdict[s] !== results[s].verdict);
-    scanned = { day: session.day, cp: session.cp };
-    sessionLabel = dateLabel(session.day);
-    busy = false;
+    scanned = { day: today, cp };
+    sessionLabel = dateLabel(today);
+    store.set('lastScan', JSON.stringify({ day: today, cp, results }));
     render();
-    paintRail(session.day, session.cp);
+    paintRail(today, cp);
     if (newConfirmed) beep();
     await notifyTelegram(session);
     return session;
+  }
+
+  // Outside the scan window nothing is requested: show the last saved scan, if any.
+  function showSaved() {
+    try {
+      const saved = JSON.parse(store.get('lastScan', 'null'));
+      if (!saved || !saved.results) return false;
+      results = saved.results; scanned = { day: saved.day, cp: saved.cp }; sessionLabel = dateLabel(saved.day);
+      render(); paintRail(saved.day, saved.cp);
+      return true;
+    } catch (e) { return false; }
   }
 
   // ---------- Telegram messages ----------
@@ -1213,42 +1326,37 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
   }
 
-  // One loop every 10 s decides whether a checkpoint is due.
+  // One loop every 10 s decides whether a checkpoint is due. In 'live' candle mode a scan runs a few
+  // seconds before its candle closes; otherwise just after (plus grace for the feed).
   async function tick() {
     if (busy) return;
     const now = nowIst();
     const s = now.min * 60 + now.sec;
-    const due = [...CPS].reverse().find((m) => m * 60 + GRACE_SEC <= s && s < (LAST + 5) * 60);
-    const inWindow = now.min >= FIRST && s < LAST * 60 + GRACE_SEC + 60;
+    const offset = candleMode === 'live' ? -LIVE_LEAD_SEC : GRACE_SEC;
+    const due = [...CPS].reverse().find((m) => m * 60 + offset <= s && s < (LAST + 5) * 60);
+    const weekday = new Date(now.day * 86400000).getUTCDay();
+    const tradingDay = weekday !== 0 && weekday !== 6 && store.get('holiday-' + now.day, '0') !== '1';
+    const inWindow = tradingDay && s >= FIRST * 60 + offset && s < LAST * 60 + GRACE_SEC + 60;
 
-    if (inWindow && due == null) {
-      setState('idle', 'First scan at 09:45 IST', 'Waiting for the 09:40 candle to close');
-      return;
-    }
     if (inWindow && due != null) {
       if (!(scanned.day === now.day && scanned.cp === due)) {
-        const sess = await scan('the ' + hhmm(due) + ' candle');
-        if (sess && !sess.live) { setState('closed', 'No session today · showing ' + sessionLabel + ' final (11:45)', 'Market closed or holiday'); return; }
+        if (!groups.length) return;
+        await scan(due);
       }
       if (scanned.day === now.day) {
         const next = CPS.find((m) => m > scanned.cp);
         setState(next ? 'live' : 'closed',
           next ? 'Live · scanned at ' + hhmm(scanned.cp) + ' IST' : 'Scan complete · final 11:45 result',
-          next ? 'Next scan ' + hhmm(next) + ' IST · ' + sessionLabel : sessionLabel + ' · scanning stopped for today');
+          (next ? 'Next scan ' + hhmm(next) + ' IST · ' : 'Scanning stopped for today · ') + sessionLabel + ' · TradingView requests today: ' + callsToday());
       }
       return;
     }
 
-    // Outside the window: show the last session's final result once, then stay idle.
-    if (!scanned.day) {
-      const sess = await scan('final 11:45 result');
-      if (!sess) return;
-    }
-    const before = now.min < FIRST;
-    const sameDay = scanned.day === now.day;
-    setState('closed',
-      (sameDay ? 'Scan complete for today' : 'Showing ' + sessionLabel) + ' · final 11:45 result',
-      before ? 'Next scan starts 09:45 IST' : 'Scanning stopped · next scan 09:45 IST on the next trading day');
+    // Outside the window: no requests at all.
+    if (!scanned.day) showSaved();
+    const before = tradingDay && s < FIRST * 60;
+    const label = scanned.day ? ('Showing ' + dateLabel(scanned.day) + ' · last scan ' + hhmm(scanned.cp) + ' IST') : 'No scan saved yet';
+    setState(before ? 'idle' : 'closed', label, before ? 'First scan at 09:45 IST' : 'Scans run 09:45–11:45 IST on trading days');
   }
 
   async function boot() {
@@ -1262,8 +1370,14 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       return;
     }
     try {
-      groups = await loadWatchlist();
+      const savedGroups = JSON.parse(store.get('groups', 'null'));
+      if (savedGroups && savedGroups.day === nowIst().day && savedGroups.groups.length) groups = savedGroups.groups;
+      else { groups = await loadWatchlist(); store.set('groups', JSON.stringify({ day: nowIst().day, groups })); }
     } catch (e) {
+      try { const g = JSON.parse(store.get('groups', 'null')); if (g && g.groups.length) groups = g.groups; } catch (x) {}
+    }
+    if (!groups.length) {
+      const e = { code: Date.now() < blockedUntil() ? 'tv_suspended' : 'upstream_error' };
       setState('error', 'Couldn’t load the Intraday Top 27 watchlist', '');
       const b = $('banner'); b.hidden = false; b.textContent = explain(codeOf(e));
       return;
