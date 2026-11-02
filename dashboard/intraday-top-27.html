@@ -109,6 +109,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 .verdict.sell { background: var(--sell); color: var(--panel); }
 .verdict.watch { background: var(--warn-soft); color: var(--warn); }
 .verdict.hold { background: var(--neutral-soft); color: var(--accent); border: 1px dashed var(--accent); }
+.paused { margin-top: 4px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); }
 .verdict.opening { background: var(--neutral-soft); color: var(--muted); border: 1px dashed var(--line); }
 .new { margin-left: 6px; font-size: 0.65rem; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; }
 .err { color: var(--sell); font-size: 0.8rem; }
@@ -166,6 +167,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>ST Momentum signal</b> — the latest fresh BUY or SELL from ST Momentum Signals today (Supertrend direction + ADX &gt; 20 + RSI &gt; 55 / &lt; 45 + Stoch RSI %K &gt; 60 / &lt; 40), on closed 5-minute candles.</li>
       <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
       <li><b>Trend match</b> — on the signal candle, Supertrend points the signal's way and all three Dual MACD Pro parts agree with it: fast MACD (8/13) above its signal line (9), slow histogram green and EMA 9 above EMA 21 for a BUY; the opposite for a SELL.</li>
+      <li><b>Pause after a signal</b> — a stock that gives a signal after 09:45 is checked (and alerted if confirmed) at the scan that sees it, then paused until the 10:45 scan: it isn't fetched and can't send another alert. Signals from 10:45 onwards don't pause.</li>
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
@@ -619,6 +621,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const LAST = 11 * 60 + 45;       // 11:45 IST
   const STEP = 5;
   const HOLD_UNTIL = 10 * 60 + 15;  // stocks with a signal by 09:45 are held until this scan
+  const PAUSE_UNTIL = 10 * 60 + 45; // a stock that signals after 09:45 is paused after that scan until this one
   const GRACE_SEC = 20;            // wait after a candle closes so the feed has it
   const BARS_5M = 1200;            // ~16 sessions: enough warm-up for the 500-bar KER rank and EMA 200
   const BARS_1D = 40;
@@ -792,7 +795,25 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return { day, cp: LAST, live: false };
   }
 
+  // Pause rule: the first signal after 09:45 that closes before 10:45 is checked at the scan that sees it;
+  // then the stock is frozen at that scan (not fetched, no new alerts) until the 10:45 scan.
+  function pauseCheckpoint(signalTimes, session) {
+    const open = utcOf(session.day, FIRST), until = utcOf(session.day, PAUSE_UNTIL);
+    const trigger = signalTimes.find((t) => t + 300 > open && t + 300 < until);
+    if (trigger == null || session.cp >= PAUSE_UNTIL) return null;
+    const cp = Math.round((((trigger + 300) + IST) % 86400) / 60);
+    return cp < session.cp ? cp : null;
+  }
+
   function evaluate(sym, session) {
+    const r = evaluateAt(sym, session);
+    if (r.error || !r.sigTimes) return r;
+    const frozen = pauseCheckpoint(r.sigTimes, session);
+    if (frozen == null) return r;
+    return { ...evaluateAt(sym, { day: session.day, cp: frozen }), paused: true, pausedAt: frozen, fresh: false };
+  }
+
+  function evaluateAt(sym, session) {
     const entry = cache[sym];
     if (!entry || entry.error) return { sym, error: entry ? entry.error : 'upstream_error' };
     const staleCode = entry.stale ? entry.lastError : null;
@@ -857,6 +878,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
       sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade, staleCode,
       fresh: !!sig && sig.i === i, // the signal fired on the candle this scan just closed
+      sigTimes: sigs.map((x) => x.t),
     };
   }
 
@@ -893,7 +915,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       tr.appendChild(el('td', 'num', timeOf(r.sig.t)));
       const tdS = el('td'); tdS.appendChild(el('span', 'sym', sym.replace(/^NSE:/, ''))); if (isNew(sym, r)) tdS.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdS);
       const tdSide = el('td'); tdSide.appendChild(el('span', 'side ' + (r.sig.side === 'BUY' ? 'buy' : 'sell'), r.sig.side)); tr.appendChild(tdSide);
-      const tdV = el('td'); tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), verdictText(r))); tr.appendChild(tdV);
+      const tdV = el('td'); tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), verdictText(r))); if (r.paused) tdV.appendChild(el('div', 'dim', 'Paused till 10:45')); tr.appendChild(tdV);
       tr.appendChild(el('td', r.bounce ? null : 'dim', r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce'));
       tr.appendChild(el('td', 'num', fmt(r.tradeObj.entry)));
       tr.appendChild(el('td', 'dim', r.trade));
@@ -975,6 +997,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         // verdict
         const tdV = el('td');
         tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), verdictText(r)));
+        if (r.paused) tdV.appendChild(el('div', 'paused', 'PAUSED till 10:45 · frozen at ' + hhmm(r.pausedAt)));
         tr.appendChild(tdV);
 
         tr.appendChild(el('td', r.sig ? null : 'dim', r.trade));
@@ -1020,6 +1043,10 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     await Promise.all(Array.from({ length: WORKERS }, async () => {
       while (queue.length) {
         const s = queue.shift();
+        const prev = results[s];
+        const nowMin = nowIst().min;
+        // Paused stocks are not fetched until 10:45; their frozen result is rebuilt from the cached candles.
+        if (prev && prev.paused && scanned.day === today && nowMin < PAUSE_UNTIL && cache[s] && cache[s].bars5) { done++; continue; }
         const fd = freshDaily(s);
         if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
         done++;

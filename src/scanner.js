@@ -6,6 +6,7 @@ const PILevels = require('./engine/piLevels.js');
 const { dayOf, utcOf, FIRST } = require('./time.js');
 
 const HOLD_UNTIL = 10 * 60 + 15; // stocks with a signal by 09:45 are held until this scan
+const PAUSE_UNTIL = 10 * 60 + 45; // a stock that signals after 09:45 is paused after that scan until this one
 
 const slice = (b, n) => ({ t: b.t.slice(0, n), o: b.o.slice(0, n), h: b.h.slice(0, n), l: b.l.slice(0, n), c: b.c.slice(0, n), v: b.v.slice(0, n) });
 
@@ -37,7 +38,25 @@ function openingHold(verdict, signalTimes, session) {
 }
 
 // bars5 / daily: {t[], o[], h[], l[], c[], v[]}, t = candle open, unix seconds UTC, oldest first.
+// Pause rule. The first signal after 09:45 that closes before 10:45 is checked at the scan that sees it;
+// then the stock is frozen at that scan until 10:45. Returns that scan's checkpoint while paused, else null.
+function pauseCheckpoint(signalTimes, session) {
+  const open = utcOf(session.day, FIRST), until = utcOf(session.day, PAUSE_UNTIL);
+  const trigger = signalTimes.find((t) => t + 300 > open && t + 300 < until);
+  if (trigger == null || session.cp >= PAUSE_UNTIL) return null;
+  const cp = Math.round((((trigger + 300) + 19800) % 86400) / 60); // checkpoint that first sees the signal
+  return cp < session.cp ? cp : null;
+}
+
 function evaluate(bars5, daily, session, lookback = 6) {
+  const res = evaluateAt(bars5, daily, session, lookback);
+  if (res.error || !res.signalTimes) return res;
+  const frozenCp = pauseCheckpoint(res.signalTimes, session);
+  if (frozenCp == null) return res;
+  return { ...evaluateAt(bars5, daily, { day: session.day, cp: frozenCp }, lookback), paused: true, pausedAt: frozenCp };
+}
+
+function evaluateAt(bars5, daily, session, lookback = 6) {
   const cutoff = utcOf(session.day, session.cp);
   let n = 0;
   while (n < bars5.t.length && bars5.t[n] + 300 <= cutoff) n++;
@@ -78,9 +97,10 @@ function evaluate(bars5, daily, session, lookback = 6) {
     bounce: bounce && { zone: bounce.zone, t: bounce.t, lo: zone.lo, hi: zone.hi },
     levels: lv && { center: lv.center, unit: lv.unit },
     signalsToday: sigs.length,
+    signalTimes: sigs.map((x) => x.t),
     lastT: bars.t[i],
     close: bars.c[i],
   };
 }
 
-module.exports = { evaluate, dailyForSession, openingHold, HOLD_UNTIL };
+module.exports = { evaluate, dailyForSession, openingHold, pauseCheckpoint, HOLD_UNTIL, PAUSE_UNTIL };

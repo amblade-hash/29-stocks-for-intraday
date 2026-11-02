@@ -236,3 +236,23 @@ test('check 3 is judged on the signal candle, not the latest candle', () => {
     assert.ok(checked > 0, 'at least one signal checked');
   });
 });
+
+test('pause rule: a stock that signals after 09:45 is frozen at that scan until 10:45', () => {
+  const { pauseCheckpoint } = require('../src/scanner.js');
+  const day = TODAY;
+  const t = (min) => utcOf(day, min); // candle open time; the candle closes 5 minutes later
+  const at = (cp) => ({ day, cp });
+  // Signal on the 10:00 candle closes 10:05: checked normally at 10:05, frozen at 10:05 from 10:10 to 10:40.
+  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 5)), null);
+  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 10)), 10 * 60 + 5);
+  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 40)), 10 * 60 + 5);
+  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 45)), null);
+  // A newer signal during the pause does not move it.
+  assert.strictEqual(pauseCheckpoint([t(10 * 60), t(10 * 60 + 20)], at(10 * 60 + 30)), 10 * 60 + 5);
+  // Opening signals (closed by 09:45) don't start a pause; a later one does.
+  assert.strictEqual(pauseCheckpoint([t(9 * 60 + 30)], at(10 * 60)), null);
+  assert.strictEqual(pauseCheckpoint([t(9 * 60 + 30), t(10 * 60 + 15)], at(10 * 60 + 30)), 10 * 60 + 20);
+  // A signal on the 10:40 candle closes at 10:45: no pause. Signals after 10:45 never pause.
+  assert.strictEqual(pauseCheckpoint([t(10 * 60 + 40)], at(10 * 60 + 50)), null);
+  assert.strictEqual(pauseCheckpoint([t(11 * 60)], at(11 * 60 + 10)), null);
+});

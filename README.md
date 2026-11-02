@@ -10,6 +10,10 @@ A stock is alerted as **CONFIRMED BUY / SELL** when all three checks pass on the
 2. Within the 6 candles (30 min) up to the signal, a candle **bounced off a PI LVLS zone** (wick into R2/R1/S1/S2, close back outside it in the signal's direction).
 3. On the **signal candle**, Supertrend points the signal's way and all three **Dual MACD Pro** parts agree: fast MACD (8/13) above its signal line (9), slow histogram (100/200/50) green and EMA 9 above EMA 21 for a BUY; the opposite for a SELL.
 
+Timing rules:
+- **Opening signals:** a BUY or SELL that fired by the 09:45 scan is never alerted; its stock is on hold until 10:15, then only a newer signal counts.
+- **Pause after a signal:** a stock that signals after 09:45 is checked (and alerted if confirmed) at that scan, then paused until the 10:45 scan. Signals from 10:45 onwards don't pause.
+
 The indicator code in `src/engine/` is the same port used by the Intraday Top 27 dashboard; it reproduced the user's real NIFTY ST Momentum alerts exactly. Each setup is posted once; a restart never re-sends it. It runs Monday to Friday only and skips NSE trading holidays listed in `config/nse-holidays.json`. If a holiday is missing from the list, the server still notices that no candles have appeared by 10:00 and stops for the day without posting anything.
 
 ## Setup
