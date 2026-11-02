@@ -76,6 +76,13 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); o
 .banner { border: 1px solid var(--sell); background: var(--sell-soft); color: var(--ink); border-radius: 10px; padding: 12px 16px; font-size: 0.9rem; }
 
 .tier { display: grid; gap: 8px; }
+tr.fresh td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+tr.fresh td:first-child { box-shadow: inset 4px 0 0 var(--accent); }
+@media (prefers-reduced-motion: no-preference) { tr.fresh td { animation: flash 1.2s ease-out 2; } }
+@keyframes flash { 0% { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
+.newpill { display: inline-block; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: var(--panel); font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em; vertical-align: 1px; }
+.signals tr { cursor: pointer; }
+.signals tr:hover td { background: var(--neutral-soft); }
 .tier h2 { font-family: var(--font-display); font-size: 1rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
 .tablebox { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 table { border-collapse: collapse; width: 100%; min-width: 880px; font-size: 0.85rem; }
@@ -145,6 +152,11 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   </section>
 
   <div class="banner" id="banner" hidden></div>
+
+  <section class="tier signals" id="signalsBox" hidden>
+    <h2 id="signalsTitle">Signals today</h2>
+    <div class="tablebox"><table id="signalsTable" style="min-width: 640px"></table></div>
+  </section>
 
   <div id="tiers"></div>
 
@@ -844,6 +856,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return {
       sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
       sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade, staleCode,
+      fresh: !!sig && sig.i === i, // the signal fired on the candle this scan just closed
     };
   }
 
@@ -856,7 +869,42 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     wrap.appendChild(txt); td.appendChild(wrap); return td;
   }
 
+  // Highlight: a signal on the candle this scan closed, or a stock that just became Confirmed.
+  const isNew = (sym, r) => !!r && !r.error && (r.fresh || ((r.verdict === 'buy' || r.verdict === 'sell') && prevVerdict[sym] !== undefined && prevVerdict[sym] !== r.verdict));
+  const RANK = { buy: 0, sell: 0, watch: 1, hold: 2, opening: 3 };
+  const rankOf = (r) => (!r || r.error ? 5 : r.verdict in RANK ? RANK[r.verdict] : r.sig ? 2 : 4);
+  const rowId = (sym) => 'row-' + sym.replace(/[^A-Za-z0-9]/g, '_');
+  const verdictText = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH · 2/3' : r.verdict === 'hold' ? 'ON HOLD · till 10:15' : r.verdict === 'opening' ? 'OPENING SIGNAL · skipped' : r.sig ? '1/3' : 'No setup';
+
+  function renderSignals() {
+    const all = groups.flatMap((g) => g.symbols).filter((s) => results[s] && !results[s].error && results[s].sig);
+    all.sort((a, b) => results[b].sig.t - results[a].sig.t || rankOf(results[a]) - rankOf(results[b]));
+    const box = $('signalsBox'), table = $('signalsTable');
+    box.hidden = !all.length;
+    $('signalsTitle').textContent = 'Signals today · ' + all.length + ' · newest first';
+    table.textContent = '';
+    const thead = el('thead'), hr = el('tr');
+    for (const h of ['Time', 'Stock', 'Signal', 'Verdict', 'PI zone', 'Entry', 'Trade']) hr.appendChild(el('th', null, h));
+    thead.appendChild(hr); table.appendChild(thead);
+    const tbody = el('tbody');
+    for (const sym of all) {
+      const r = results[sym];
+      const tr = el('tr', isNew(sym, r) ? 'fresh' : r.verdict === 'buy' ? 'confirmed-buy' : r.verdict === 'sell' ? 'confirmed-sell' : null);
+      tr.appendChild(el('td', 'num', timeOf(r.sig.t)));
+      const tdS = el('td'); tdS.appendChild(el('span', 'sym', sym.replace(/^NSE:/, ''))); if (isNew(sym, r)) tdS.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdS);
+      const tdSide = el('td'); tdSide.appendChild(el('span', 'side ' + (r.sig.side === 'BUY' ? 'buy' : 'sell'), r.sig.side)); tr.appendChild(tdSide);
+      const tdV = el('td'); tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), verdictText(r))); tr.appendChild(tdV);
+      tr.appendChild(el('td', r.bounce ? null : 'dim', r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce'));
+      tr.appendChild(el('td', 'num', fmt(r.tradeObj.entry)));
+      tr.appendChild(el('td', 'dim', r.trade));
+      tr.addEventListener('click', () => { const t = document.getElementById(rowId(sym)); if (t) t.scrollIntoView({ block: 'center', behavior: 'smooth' }); });
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+  }
+
   function render() {
+    renderSignals();
     const host = $('tiers'); host.textContent = '';
     let nBuy = 0, nSell = 0, nWatch = 0, nSig = 0, nErr = 0, nHold = 0;
     for (const g of groups) {
@@ -869,11 +917,17 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       for (const [h, s] of heads) { const th = el('th', null, h); if (s) th.appendChild(el('small', null, s)); hr.appendChild(th); }
       thead.appendChild(hr); table.appendChild(thead);
       const tbody = el('tbody');
-      for (const sym of g.symbols) {
+      // Most important first: confirmed, watch, other signals, then no signal; newest signal first within each.
+      const ordered = g.symbols.map((sym, idx) => ({ sym, idx })).sort((a, b) => {
+        const ra = results[a.sym], rb = results[b.sym];
+        return rankOf(ra) - rankOf(rb) || ((rb && rb.sig ? rb.sig.t : 0) - (ra && ra.sig ? ra.sig.t : 0)) || a.idx - b.idx;
+      }).map((x) => x.sym);
+      for (const sym of ordered) {
         const r = results[sym];
         const tr = el('tr');
+        tr.id = rowId(sym);
         const name = sym.replace(/^NSE:/, '');
-        const tdSym = el('td'); tdSym.appendChild(el('span', 'sym', name)); tr.appendChild(tdSym);
+        const tdSym = el('td'); tdSym.appendChild(el('span', 'sym', name)); if (isNew(sym, r)) tdSym.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdSym);
         if (!r) {
           const td = el('td', 'dim', busy ? 'Scanning…' : 'Waiting for first scan'); td.colSpan = 6; tr.appendChild(td);
           tbody.appendChild(tr); continue;
@@ -889,6 +943,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         if (r.verdict === 'sell') { nSell++; tr.className = 'confirmed-sell'; }
         if (r.verdict === 'watch') nWatch++;
         if (r.verdict === 'hold') nHold++;
+        if (isNew(sym, r)) tr.className = 'fresh';
 
         // 1. signal
         const td1 = el('td'); const w1 = el('div', 'check');
@@ -919,9 +974,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
         // verdict
         const tdV = el('td');
-        const vText = r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH · 2/3' : r.verdict === 'hold' ? 'ON HOLD · till 10:15' : r.verdict === 'opening' ? 'OPENING SIGNAL · skipped' : r.sig ? '1/3' : 'No setup';
-        tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), vText));
-        if ((r.verdict === 'buy' || r.verdict === 'sell') && prevVerdict[sym] !== undefined && prevVerdict[sym] !== r.verdict) tdV.appendChild(el('span', 'new', 'NEW'));
+        tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), verdictText(r)));
         tr.appendChild(tdV);
 
         tr.appendChild(el('td', r.sig ? null : 'dim', r.trade));
