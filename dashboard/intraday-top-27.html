@@ -705,14 +705,27 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
   // ---------- connector ----------
   function codeOf(e) { return (e && e.code) || 'upstream_error'; }
+  // TradingView can suspend connector access for heavy use. Once it says so, make no more requests
+  // until the suspension ends (00:00 UTC = 05:30 IST): retrying risks a one-week suspension.
+  // Known suspension reported on Mon 2 Nov 2026 (ends 00:00 UTC on 3 Nov = 05:30 IST): make no requests before then.
+  const KNOWN_SUSPENSION_END = Date.UTC(2026, 10, 3);
+  const blockedUntil = () => Math.max(Number(store.get('tvBlockedUntil', '0')) || 0, KNOWN_SUSPENSION_END);
+  const isQuotaError = (e) => /quota|suspend/i.test(String((e && e.message) || '') + ' ' + (() => { try { return JSON.stringify(e && e.result); } catch (x) { return ''; } })());
+  function blockTradingView() {
+    const nextUtcMidnight = (Math.floor(Date.now() / 86400000) + 1) * 86400000;
+    store.set('tvBlockedUntil', String(nextUtcMidnight));
+  }
+
   async function call(tool, input, retried) {
+    if (Date.now() < blockedUntil()) throw { code: 'tv_suspended' };
     try {
       // 25 s per request: a hung request must not hold up the scan (it is retried once below).
       const r = await mcp.callTool(SERVER, tool, input, { cache: false, signal: AbortSignal.timeout(25000) });
       return r.payload;
     } catch (e) {
+      if (isQuotaError(e)) { blockTradingView(); throw { code: 'tv_suspended' }; }
       // These are read-only calls, so any failure that isn't a permission/connection problem is retried once.
-      const final = ['needs_reauth', 'server_not_connected', 'not_in_manifest', 'approval_required', 'not_granted', 'consent_required', 'blocked_by_policy', 'selection_required', 'bad_request', 'user_changed'];
+      const final = ['tv_suspended', 'needs_reauth', 'server_not_connected', 'not_in_manifest', 'approval_required', 'not_granted', 'consent_required', 'blocked_by_policy', 'selection_required', 'bad_request', 'user_changed'];
       if (!retried && e && !final.includes(e.code)) {
         await new Promise((res) => setTimeout(res, Math.min(e.retryAfterMs || 0, 60000) + 1000 + Math.random() * 2000));
         return call(tool, input, true);
@@ -730,6 +743,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       case 'consent_required': return 'This page needs your permission to read TradingView data. Allow TradingView in this page’s Permissions menu, then reload.';
       case 'selection_required': return 'You have more than one TradingView connector. Choose one in the prompt claude.ai shows, then reload.';
       case 'blocked_by_policy': return 'Your organization’s policy blocks TradingView for this page.';
+      case 'tv_suspended': return 'TradingView has suspended connector access for this account until 05:30 IST because of the number of requests. Scanning is stopped until then to avoid a longer suspension.';
       case 'server_unavailable': return 'TradingView didn’t answer in time. The next scan will try again.';
       default: return 'TradingView returned an error. The next scan will try again.';
     }
@@ -1057,6 +1071,11 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   }
 
   async function scanOnce(reason) {
+    if (Date.now() < blockedUntil()) {
+      const b = $('banner'); b.hidden = false; b.textContent = explain('tv_suspended');
+      setState('error', 'Stopped: TradingView access suspended until 05:30 IST', '');
+      return null;
+    }
     const all = groups.flatMap((g) => g.symbols);
     let done = 0;
     const today = nowIst().day;
@@ -1074,7 +1093,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         const nowMin = nowIst().min;
         // Paused stocks are not fetched until 10:45; their frozen result is rebuilt from the cached candles.
         if (prev && prev.paused && scanned.day === today && nowMin < PAUSE_UNTIL && cache[s] && cache[s].bars5) { done++; continue; }
-        if (Date.now() > deadline) { markNotRefreshed(s); done++; continue; }
+        if (Date.now() > deadline || Date.now() < blockedUntil()) { markNotRefreshed(s); done++; continue; }
         const fd = freshDaily(s);
         if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
         done++;
@@ -1085,7 +1104,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const failed = all.filter((s) => cache[s] && (cache[s].error || cache[s].stale));
     for (let k = 0; k < failed.length; k++) {
       const s = failed[k];
-      if (Date.now() > deadline) break;
+      if (Date.now() > deadline || Date.now() < blockedUntil()) break;
       label('Retrying ' + failed.length + ' stock' + (failed.length === 1 ? '' : 's') + ' · ' + (k + 1) + '/' + failed.length);
       await new Promise((res) => setTimeout(res, 1500));
       const fd = freshDaily(s);
