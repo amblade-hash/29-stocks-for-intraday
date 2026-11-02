@@ -625,6 +625,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const GRACE_SEC = 20;            // wait after a candle closes so the feed has it
   const BARS_5M = 1200;            // ~16 sessions: enough warm-up for the 500-bar KER rank and EMA 200
   const BARS_1D = 40;
+  const SCAN_BUDGET_MS = 150000;    // a scan stops fetching after 2.5 minutes
   const WORKERS = 2;               // parallel TradingView requests; more tends to time out
   const CPS = []; for (let m = FIRST; m <= LAST; m += STEP) CPS.push(m);
 
@@ -706,7 +707,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   function codeOf(e) { return (e && e.code) || 'upstream_error'; }
   async function call(tool, input, retried) {
     try {
-      const r = await mcp.callTool(SERVER, tool, input, { cache: false });
+      // 25 s per request: a hung request must not hold up the scan (it is retried once below).
+      const r = await mcp.callTool(SERVER, tool, input, { cache: false, signal: AbortSignal.timeout(25000) });
       return r.payload;
     } catch (e) {
       // These are read-only calls, so any failure that isn't a permission/connection problem is retried once.
@@ -753,6 +755,14 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return { t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v };
   };
   const slice = (b, n) => ({ t: b.t.slice(0, n), o: b.o.slice(0, n), h: b.h.slice(0, n), l: b.l.slice(0, n), c: b.c.slice(0, n), v: b.v.slice(0, n) });
+
+  // Out of time this scan: keep the last good candles (shown as not refreshed) instead of waiting.
+  function markNotRefreshed(sym) {
+    const entry = cache[sym] || (cache[sym] = {});
+    entry.lastError = 'scan_timeout';
+    if (entry.bars5 && entry.bars5.t && entry.bars5.t.length) entry.stale = true;
+    else entry.error = 'scan_timeout';
+  }
 
   async function fetchSymbol(sym, wantDaily) {
     const entry = cache[sym] || (cache[sym] = {});
@@ -1031,14 +1041,31 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   }
 
   // ---------- scanning ----------
+  // Always clears the busy flag, so one failed scan can never stop the scans after it.
   async function scan(reason) {
-    if (busy) return;
+    if (busy) return null;
     busy = true;
+    try {
+      return await scanOnce(reason);
+    } catch (e) {
+      console.error('scan failed', e);
+      setState('error', 'Scan failed: ' + (e && e.message ? e.message : 'unknown error') + ' · next scan retries', '');
+      return null;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function scanOnce(reason) {
     const all = groups.flatMap((g) => g.symbols);
     let done = 0;
     const today = nowIst().day;
     const freshDaily = (s) => !cache[s] || cache[s].dailyFor !== today;
-    setState('scanning', 'Scanning ' + reason + ' · 0/' + all.length);
+    const startedAt = Date.now();
+    const started = hhmm(nowIst().min) + ':' + String(Math.floor(nowIst().sec)).padStart(2, '0');
+    const deadline = startedAt + SCAN_BUDGET_MS; // finish well before the next 5-minute scan
+    const label = (txt) => setState('scanning', txt + ' · started ' + started);
+    label('Scanning ' + reason + ' · 0/' + all.length);
     const queue = all.slice();
     await Promise.all(Array.from({ length: WORKERS }, async () => {
       while (queue.length) {
@@ -1047,17 +1074,19 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         const nowMin = nowIst().min;
         // Paused stocks are not fetched until 10:45; their frozen result is rebuilt from the cached candles.
         if (prev && prev.paused && scanned.day === today && nowMin < PAUSE_UNTIL && cache[s] && cache[s].bars5) { done++; continue; }
+        if (Date.now() > deadline) { markNotRefreshed(s); done++; continue; }
         const fd = freshDaily(s);
         if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
         done++;
-        setState('scanning', 'Scanning ' + reason + ' · ' + done + '/' + all.length);
+        label('Scanning ' + reason + ' · ' + done + '/' + all.length);
       }
     }));
     // Second attempt, one at a time, for any stock that failed in the first pass.
     const failed = all.filter((s) => cache[s] && (cache[s].error || cache[s].stale));
     for (let k = 0; k < failed.length; k++) {
       const s = failed[k];
-      setState('scanning', 'Retrying ' + failed.length + ' stock' + (failed.length === 1 ? '' : 's') + ' · ' + (k + 1) + '/' + failed.length);
+      if (Date.now() > deadline) break;
+      label('Retrying ' + failed.length + ' stock' + (failed.length === 1 ? '' : 's') + ' · ' + (k + 1) + '/' + failed.length);
       await new Promise((res) => setTimeout(res, 1500));
       const fd = freshDaily(s);
       if (await fetchSymbol(s, fd) && fd) cache[s].dailyFor = today;
