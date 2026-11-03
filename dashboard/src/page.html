@@ -583,6 +583,17 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
       sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade, staleCode,
       fresh: !!sig && sig.i === i, // the signal fired on the candle this scan just closed
+      // Every signal today with its own checks and trade outcome, for the report's day summary.
+      sigList: sigs.map((x) => {
+        const xb = lv ? PILevels.bounce(bars, x.i, x.side, lv, lookback, dayStart) : null;
+        const xw = x.side === 'BUY' ? 'BULL' : 'BEAR';
+        const xc3 = (st.st.dir[x.i] === 1 ? 'BULL' : 'BEAR') === xw && dm.trend[x.i] === xw;
+        const passes = 1 + (xb ? 1 : 0) + (xc3 ? 1 : 0);
+        const kind = x.t + 300 <= utcOf(session.day, FIRST) ? 'opening' : passes === 3 ? 'confirmed' : passes === 2 ? 'watch' : 'one';
+        const tr = x.trade;
+        const outcome = tr.t1Hit ? 'win' : tr.exit === 'SL' ? 'loss' : 'open';
+        return { side: x.side, t: x.t, kind, outcome };
+      }),
       sigTimes: sigs.map((x) => x.t),
     };
   }
@@ -971,10 +982,30 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     doc.setFillColor(...TONE_FILL.loss); doc.rect(150, 88, 10, 8, 'F'); doc.text('Hit SL (Supertrend close) before Exit 1', 164, 95);
     doc.setTextColor(0);
 
+    // Day summary: every signal today and how its trade went (Exit 1 or more vs SL).
+    const all = ok.flatMap((s) => (res[s].sigList || []).map((x) => ({ ...x, sym: s })));
+    const tally = (list, label) => {
+      const win = list.filter((x) => x.outcome === 'win').length, loss = list.filter((x) => x.outcome === 'loss').length;
+      const resolved = win + loss;
+      return [label, list.length, list.filter((x) => x.side === 'BUY').length + ' / ' + list.filter((x) => x.side === 'SELL').length, win, loss, list.length - resolved, resolved ? Math.round((100 * win) / resolved) + '%' : '-'];
+    };
+    doc.autoTable({
+      startY: 106, theme: 'grid', styles: { fontSize: 9, halign: 'center' }, headStyles: { fillColor: [31, 95, 139] },
+      columnStyles: { 0: { halign: 'left', fontStyle: 'bold' } },
+      head: [['Day summary (all signals today)', 'Signals', 'Buy / Sell', 'Hit Exit 1 or more', 'Hit SL', 'Still open', 'Exit 1+ rate (of resolved)']],
+      body: [
+        tally(all, 'All signals'),
+        tally(all.filter((x) => x.kind === 'confirmed'), 'Confirmed (3 of 3)'),
+        tally(all.filter((x) => x.kind === 'watch'), 'Watch (2 of 3)'),
+        tally(all.filter((x) => x.kind === 'opening'), 'Opening signals (skipped)'),
+      ],
+      didParseCell: (d) => { if (d.section === 'body' && d.column.index === 3) d.cell.styles.fillColor = TONE_FILL.win; if (d.section === 'body' && d.column.index === 4) d.cell.styles.fillColor = TONE_FILL.loss; },
+    });
+
     // Alerts sent to Telegram today
     const alerts = Object.entries(rep.alerts || {}).filter(([k]) => k.includes('|'));
     doc.autoTable({
-      startY: 106, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
+      startY: doc.lastAutoTable.finalY + 18, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
       head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at ' + hhmm(rep.cp)]],
       didParseCell: toneRows(4),
       body: alerts.length ? alerts.map(([k, at]) => {
