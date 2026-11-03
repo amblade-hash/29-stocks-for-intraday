@@ -206,6 +206,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     prev: ['open[1]|5', 'high[1]|5', 'low[1]|5', 'close[1]|5', 'volume[1]|5'],
     live: ['open|5', 'high|5', 'low|5', 'close|5', 'volume|5'],
   };
+  const FOLLOW_CP = 12 * 60 + 30;    // 12:30: follow up the trades of stocks that signalled after 11:00
+  const followFrom = () => Number(store.get('followFromMin', '')) || 11 * 60; // signals seen after this time are followed up
   const LIVE_LEAD_SEC = 20;          // 'live' mode reads the forming candle 10-20 s before it closes (ticks are 10 s apart)
   const WORKERS = 2;               // parallel TradingView requests; more tends to time out
   const CPS = []; for (let m = FIRST; m <= LAST; m += STEP) CPS.push(m);
@@ -510,6 +512,16 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return pause && pause.cp < session.cp && session.cp < pause.until ? pause : null;
   }
 
+  function tradeLabel(tr) {
+    if (tr.exit === 'SL') return 'Stopped (Supertrend close)';
+    if (tr.exit === 'TSL') return 'Trailed out (EMA 10)';
+    if (tr.exit === 'T3' || tr.t3Hit) return 'Exit 3 hit (1:2)';
+    if (tr.t2Hit) return 'Exit 2 hit (1:1.5)';
+    if (tr.t1Hit) return 'Exit 1 hit (1:1)';
+    return 'Open';
+  }
+  const outcomeOf = (tr) => (tr.t1Hit ? 'win' : tr.exit === 'SL' ? 'loss' : 'open');
+
   function evaluate(sym, session) {
     const r = evaluateAt(sym, session);
     if (r.error || !r.sigTimes) return r;
@@ -568,16 +580,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       else if (isOpening(sig)) verdict = 'opening';
     }
 
-    let trade = '—';
-    if (sig) {
-      const tr = sig.trade;
-      if (tr.exit === 'SL') trade = 'Stopped (Supertrend close)';
-      else if (tr.exit === 'TSL') trade = 'Trailed out (EMA 10)';
-      else if (tr.exit === 'T3' || tr.t3Hit) trade = 'Exit 3 hit (1:2)';
-      else if (tr.t2Hit) trade = 'Exit 2 hit (1:1.5)';
-      else if (tr.t1Hit) trade = 'Exit 1 hit (1:1)';
-      else trade = 'Open';
-    }
+    const trade = sig ? tradeLabel(sig.trade) : '—';
 
     return {
       sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
@@ -591,8 +594,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         const passes = 1 + (xb ? 1 : 0) + (xc3 ? 1 : 0);
         const kind = x.t + 300 <= utcOf(session.day, FIRST) ? 'opening' : passes === 3 ? 'confirmed' : passes === 2 ? 'watch' : 'one';
         const tr = x.trade;
-        const outcome = tr.t1Hit ? 'win' : tr.exit === 'SL' ? 'loss' : 'open';
-        return { side: x.side, t: x.t, kind, outcome };
+        return { side: x.side, t: x.t, kind, outcome: outcomeOf(tr), trade: tradeLabel(tr), entry: tr.entry, bounce: xb ? xb.zone + ' at ' + timeOf(xb.t) : null };
       }),
       sigTimes: sigs.map((x) => x.t),
     };
@@ -842,6 +844,63 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return session;
   }
 
+  // Follows one trade forward with ST Momentum's own exit rules (SL on a candle close through the Supertrend
+  // before Exit 1; trailing stop on a close through EMA 10 after Exit 1; Exit 3 ends the trade).
+  function followTrade(st, bars, from, tr0) {
+    const tr = { ...tr0, t1Hit: false, t2Hit: false, t3Hit: false, exit: undefined, active: true };
+    const isBuy = tr.dir === 1;
+    const { h, l, c } = bars;
+    for (let i = from + 1; i < c.length && tr.active; i++) {
+      if (!tr.t1Hit) { if (isBuy ? c[i] < st.st.line[i] : c[i] > st.st.line[i]) { tr.exit = 'SL'; tr.active = false; break; } }
+      else if (isBuy ? c[i] < st.ema1[i] : c[i] > st.ema1[i]) { tr.exit = 'TSL'; tr.active = false; break; }
+      if (!tr.t1Hit && (isBuy ? h[i] >= tr.t1 : l[i] <= tr.t1)) tr.t1Hit = true;
+      if (!tr.t2Hit && (isBuy ? h[i] >= tr.t2 : l[i] <= tr.t2)) tr.t2Hit = true;
+      if (!tr.t3Hit && (isBuy ? h[i] >= tr.t3 : l[i] <= tr.t3)) { tr.t3Hit = true; tr.exit = 'T3'; tr.active = false; }
+    }
+    return tr;
+  }
+
+  // 12:30 follow-up: only stocks whose signal came after 11:00 are downloaded (one request each), and only
+  // their trade outcomes are updated, up to 12:30. No new signals, no verdict changes, no Telegram.
+  async function followUp() {
+    const today = nowIst().day;
+    let last;
+    try { last = JSON.parse(store.get('lastScan', 'null')); } catch (e) { last = null; }
+    if (!last || last.day !== today || last.cp !== LAST) return;
+    const res = last.results;
+    const seenAfter = (t) => t + 300 > utcOf(today, followFrom());
+    const syms = Object.keys(res).filter((s) => res[s] && !res[s].error && (res[s].sigList || []).some((x) => seenAfter(x.t)));
+    const cutoff = utcOf(today, FOLLOW_CP);
+    let done = 0, checked = 0;
+    for (const s of syms) {
+      setState('scanning', 'Checking trades at 12:30 · ' + (++done) + '/' + syms.length + ' stocks that signalled after 11:00');
+      if (Date.now() < blockedUntil() || callsToday() >= DAILY_CALL_BUDGET) break;
+      if (!(await loadHistory(s, today))) continue;
+      const b = cache[s].bars5;
+      let n = 0;
+      while (n < b.t.length && b.t[n] + 300 <= cutoff) n++;
+      const bars = slice(b, n);
+      const st = STMomentum.compute(bars);
+      const r = res[s];
+      for (const x of r.sigList) {
+        if (!seenAfter(x.t)) continue;
+        const sg = st.signals.find((y) => y.t === x.t);
+        if (!sg) continue;
+        const tr = followTrade(st, bars, sg.i, sg.trade);
+        x.outcome = outcomeOf(tr); x.trade = tradeLabel(tr); x.followed = true;
+        if (r.sig && r.sig.t === x.t) { r.trade = x.trade; r.tradeObj = { ...r.tradeObj, t1Hit: tr.t1Hit, t2Hit: tr.t2Hit, t3Hit: tr.t3Hit, exit: tr.exit }; r.followed = true; }
+      }
+      checked++;
+    }
+    if (syms.length) await saveHistory(today);
+    store.set('lastScan', JSON.stringify(last));
+    store.set('lastReport', JSON.stringify({ day: today, cp: LAST, tradeAt: FOLLOW_CP, followed: checked, results: res, groups, alerts: loadSent(today) }));
+    results = res; scanned = { day: today, cp: LAST };
+    render(); showPdfButton();
+    setState('closed', syms.length ? 'Trades checked at 12:30 for ' + checked + ' stock' + (checked === 1 ? '' : 's') + ' that signalled after 11:00 · report ready' : 'No signals after 11:00 to check · report ready',
+      'Use “Download PDF report” · TradingView requests today: ' + callsToday());
+  }
+
   // Outside the scan window nothing is requested: show the last saved scan, if any.
   function showSaved() {
     try {
@@ -946,7 +1005,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   function showPdfButton() {
     const rep = savedReport();
     pdfBtn.hidden = !rep;
-    if (rep) pdfBtn.textContent = 'Download PDF report · ' + dateLabel(rep.day) + ' ' + hhmm(rep.cp);
+    if (rep) pdfBtn.textContent = 'Download PDF report · ' + dateLabel(rep.day) + ' ' + hhmm(rep.tradeAt || rep.cp);
   }
   const dirWord = (d) => (d === 'UP' ? 'Up' : d === 'DOWN' ? 'Down' : 'Flat');
   const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH (2 of 3)' : r.verdict === 'hold' ? 'On hold' : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
@@ -975,7 +1034,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
     doc.text('Intraday Top 27 - daily report', 40, 48);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
-    doc.text(dateLabel(rep.day) + ' ' + new Date(rep.day * 86400000).getUTCFullYear() + ' · final scan ' + hhmm(rep.cp) + ' IST · 5-minute chart, NSE · ST Momentum + PI LVLS + Dual MACD Pro', 40, 66);
+    doc.text(dateLabel(rep.day) + ' ' + new Date(rep.day * 86400000).getUTCFullYear() + ' · final scan ' + hhmm(rep.cp) + (rep.tradeAt ? ', trades of signals after 11:00 followed to ' + hhmm(rep.tradeAt) : '') + ' IST · 5-minute chart, NSE · ST Momentum + PI LVLS + Dual MACD Pro', 40, 66);
     doc.text('Confirmed buy: ' + count('buy') + '   Confirmed sell: ' + count('sell') + '   Watch: ' + count('watch') + '   Stocks with a signal today: ' + ok.filter((s) => res[s].sig).length + '   Not scanned: ' + (syms.length - ok.length), 40, 82);
     doc.setFontSize(9);
     doc.setFillColor(...TONE_FILL.win); doc.rect(40, 88, 10, 8, 'F'); doc.text('Hit Exit 1 or more', 54, 95);
@@ -1006,7 +1065,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const alerts = Object.entries(rep.alerts || {}).filter(([k]) => k.includes('|'));
     doc.autoTable({
       startY: doc.lastAutoTable.finalY + 18, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
-      head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at ' + hhmm(rep.cp)]],
+      head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at ' + hhmm(rep.tradeAt || rep.cp)]],
       didParseCell: toneRows(4),
       body: alerts.length ? alerts.map(([k, at]) => {
         const [side0, sym, t, kind] = k.split('|');
@@ -1017,13 +1076,14 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       }) : [['None', '', '', '', '']],
     });
 
-    // Signals today, newest first
-    const withSig = ok.filter((s) => res[s].sig).sort((a, b) => res[b].sig.t - res[a].sig.t);
+    // Every signal of the day, newest first.
+    const kindText = { confirmed: 'CONFIRMED', watch: 'WATCH (2 of 3)', one: '1 of 3', opening: 'Opening signal, skipped' };
+    const everySig = all.slice().sort((a, b) => b.t - a.t);
     doc.autoTable({
       startY: doc.lastAutoTable.finalY + 18, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
-      head: [['Signals today (newest first)', 'Time', 'Side', 'Verdict', 'PI zone bounce', 'Entry', 'Trade']],
-      body: withSig.length ? withSig.map((s) => { const r = res[s]; return [nm(s), timeOf(r.sig.t), r.sig.side, plainVerdict(r), r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce', n2(r.tradeObj.entry), r.trade]; }) : [['None', '', '', '', '', '', '']],
-      didParseCell: (d) => { toneRows(6)(d); if (d.section === 'body' && d.column.index === 3) { const v = String(d.cell.raw); if (v.startsWith('CONFIRMED BUY')) d.cell.styles.textColor = [15, 122, 74]; if (v.startsWith('CONFIRMED SELL')) d.cell.styles.textColor = [180, 45, 45]; } },
+      head: [['Every signal today (newest first)', 'Time', 'Side', 'Verdict', 'PI zone bounce', 'Entry', 'Trade' + (rep.tradeAt ? ' (to ' + hhmm(rep.tradeAt) + ' if after 11:00)' : '')]],
+      body: everySig.length ? everySig.map((x) => [nm(x.sym), timeOf(x.t), x.side, kindText[x.kind] || x.kind, x.bounce || 'No bounce', n2(x.entry), x.trade || '-']) : [['None', '', '', '', '', '', '']],
+      didParseCell: (d) => { toneRows(6)(d); if (d.section === 'body' && d.column.index === 3) { const v = String(d.cell.raw); if (v === 'CONFIRMED') d.cell.styles.textColor = d.row.raw[2] === 'BUY' ? [15, 122, 74] : [180, 45, 45]; } },
     });
 
     // Every stock, by tier
@@ -1089,6 +1149,14 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
           next ? 'Live · scanned at ' + hhmm(scanned.cp) + ' IST' : 'Scan complete · final 11:45 result',
           (next ? 'Next scan ' + hhmm(next) + ' IST · ' : 'Scanning stopped for today · ') + sessionLabel + ' · TradingView requests today: ' + callsToday());
       }
+      return;
+    }
+
+    // 12:30: follow up the trades of stocks that signalled after 11:00 (once), then the report is final.
+    if (tradingDay && groups.length && s >= FOLLOW_CP * 60 + GRACE_SEC && s < (15 * 60 + 30) * 60 && store.get('followup-' + now.day, '0') !== '1') {
+      store.set('followup-' + now.day, '1');
+      busy = true;
+      try { await followUp(); } catch (e) { console.error('follow-up failed', e); } finally { busy = false; }
       return;
     }
 
