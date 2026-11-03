@@ -12,7 +12,7 @@ A stock is alerted as **CONFIRMED BUY / SELL** when all three checks pass on the
 
 Timing rules:
 - **Opening signals:** a BUY or SELL that fired by the 09:45 scan is never alerted; its stock is on hold until 10:15, then only a newer signal counts.
-- **Pause after a signal:** a stock that signals after 09:45 is checked (and alerted if confirmed) at that scan, then paused until the 10:45 scan. Signals from 10:45 onwards don't pause.
+- **Pause after a signal:** a stock that signals after 09:45 is checked (and alerted if confirmed) at that scan, then paused: until 10:45 if the signal was seen by the 10:00 scan, until 11:40 if seen after 10:00. Signals during a pause are ignored; after a pause ends, the next signal starts a new one.
 
 The indicator code in `src/engine/` is the same port used by the Intraday Top 27 dashboard; it reproduced the user's real NIFTY ST Momentum alerts exactly. Each setup is posted once; a restart never re-sends it. It runs Monday to Friday only and skips NSE trading holidays listed in `config/nse-holidays.json`. If a holiday is missing from the list, the server still notices that no candles have appeared by 10:00 and stops for the day without posting anything.
 

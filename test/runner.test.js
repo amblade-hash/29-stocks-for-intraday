@@ -237,22 +237,31 @@ test('check 3 is judged on the signal candle, not the latest candle', () => {
   });
 });
 
-test('pause rule: a stock that signals after 09:45 is frozen at that scan until 10:45', () => {
+test('pause rules: after 09:45 paused till 10:45, after 10:00 paused till 11:40', () => {
   const { pauseCheckpoint } = require('../src/scanner.js');
   const day = TODAY;
   const t = (min) => utcOf(day, min); // candle open time; the candle closes 5 minutes later
   const at = (cp) => ({ day, cp });
-  // Signal on the 10:00 candle closes 10:05: checked normally at 10:05, frozen at 10:05 from 10:10 to 10:40.
+  const P = (cp, until) => ({ cp, until });
+  // Seen at 09:50 (09:45 candle): paused 09:55-10:40, back at 10:45.
+  assert.strictEqual(pauseCheckpoint([t(9 * 60 + 45)], at(9 * 60 + 50)), null);
+  assert.deepStrictEqual(pauseCheckpoint([t(9 * 60 + 45)], at(10 * 60 + 40)), P(9 * 60 + 50, 10 * 60 + 45));
+  assert.strictEqual(pauseCheckpoint([t(9 * 60 + 45)], at(10 * 60 + 45)), null);
+  // Seen at 10:00 exactly (09:55 candle): still the 10:45 pause.
+  assert.deepStrictEqual(pauseCheckpoint([t(9 * 60 + 55)], at(10 * 60 + 5)), P(10 * 60, 10 * 60 + 45));
+  // Seen at 10:05 (10:00 candle): paused until 11:40.
   assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 5)), null);
-  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 10)), 10 * 60 + 5);
-  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 40)), 10 * 60 + 5);
-  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 45)), null);
-  // A newer signal during the pause does not move it.
-  assert.strictEqual(pauseCheckpoint([t(10 * 60), t(10 * 60 + 20)], at(10 * 60 + 30)), 10 * 60 + 5);
-  // Opening signals (closed by 09:45) don't start a pause; a later one does.
+  assert.deepStrictEqual(pauseCheckpoint([t(10 * 60)], at(10 * 60 + 50)), P(10 * 60 + 5, 11 * 60 + 40));
+  assert.deepStrictEqual(pauseCheckpoint([t(10 * 60)], at(11 * 60 + 35)), P(10 * 60 + 5, 11 * 60 + 40));
+  assert.strictEqual(pauseCheckpoint([t(10 * 60)], at(11 * 60 + 40)), null);
+  // Signals during a pause are ignored.
+  assert.deepStrictEqual(pauseCheckpoint([t(10 * 60), t(10 * 60 + 30)], at(11 * 60)), P(10 * 60 + 5, 11 * 60 + 40));
+  // After the 10:45 pause ends, a new signal (seen 11:00) starts a pause until 11:40.
+  assert.deepStrictEqual(pauseCheckpoint([t(9 * 60 + 45), t(10 * 60 + 55)], at(11 * 60 + 10)), P(11 * 60, 11 * 60 + 40));
+  // A signal seen exactly at 10:45 after the first pause ends: new pause until 11:40.
+  assert.deepStrictEqual(pauseCheckpoint([t(9 * 60 + 45), t(10 * 60 + 40)], at(10 * 60 + 50)), P(10 * 60 + 45, 11 * 60 + 40));
+  // Opening signals never pause; a later one does. Signals seen at 11:40 or later never pause.
   assert.strictEqual(pauseCheckpoint([t(9 * 60 + 30)], at(10 * 60)), null);
-  assert.strictEqual(pauseCheckpoint([t(9 * 60 + 30), t(10 * 60 + 15)], at(10 * 60 + 30)), 10 * 60 + 20);
-  // A signal on the 10:40 candle closes at 10:45: no pause. Signals after 10:45 never pause.
-  assert.strictEqual(pauseCheckpoint([t(10 * 60 + 40)], at(10 * 60 + 50)), null);
-  assert.strictEqual(pauseCheckpoint([t(11 * 60)], at(11 * 60 + 10)), null);
+  assert.deepStrictEqual(pauseCheckpoint([t(9 * 60 + 30), t(10 * 60 + 15)], at(10 * 60 + 30)), P(10 * 60 + 20, 11 * 60 + 40));
+  assert.strictEqual(pauseCheckpoint([t(11 * 60 + 35)], at(11 * 60 + 45)), null);
 });
