@@ -1357,7 +1357,15 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
   // ---------- PDF report ----------
   const pdfBtn = document.getElementById('pdf');
-  function savedReport() { try { return JSON.parse(store.get('lastReport', 'null')); } catch (e) { return null; } }
+  function savedReport() {
+    try {
+      const rep = JSON.parse(store.get('lastReport', 'null'));
+      // Fall back to the saved final 11:45 scan (e.g. a day scanned by an older version of this page).
+      const last = JSON.parse(store.get('lastScan', 'null'));
+      if (last && last.cp === LAST && (!rep || rep.day < last.day)) return { day: last.day, cp: last.cp, results: last.results, groups, alerts: loadSent(last.day) };
+      return rep;
+    } catch (e) { return null; }
+  }
   function showPdfButton() {
     const rep = savedReport();
     pdfBtn.hidden = !rep;
@@ -1480,7 +1488,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   }
 
   async function boot() {
-    showPdfButton();
     paintRail(null, null);
     render();
     mcp = window.claude && window.claude.use ? await window.claude.use('mcp') : null;
@@ -1504,6 +1511,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       return;
     }
     render();
+    showPdfButton();
     await tick();
     setInterval(tick, 10000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
