@@ -172,7 +172,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
-    <p>At 12:00 IST one extra scan builds the day's report (no Telegram alerts); the 11:50 and 11:55 candles are collected in the background for it. After that, <b>Download PDF report</b> saves the 12:00 report as a PDF.</p>
+    <p>The final 11:45 scan is the day's report: after it, <b>Download PDF report</b> saves it as a PDF.</p>
     <p>With Telegram alerts on, each new Confirmed buy or sell is posted to the Telegram channel at the scan that finds it. Nothing else is posted. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
   </details>
 </div>
@@ -206,8 +206,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     prev: ['open[1]|5', 'high[1]|5', 'low[1]|5', 'close[1]|5', 'volume[1]|5'],
     live: ['open|5', 'high|5', 'low|5', 'close|5', 'volume|5'],
   };
-  const REPORT_CP = 12 * 60;         // one extra scan at 12:00 for the day's report (no alerts)
-  const COLLECT_CPS = [11 * 60 + 50, 11 * 60 + 55]; // candles collected silently so the 12:00 report needs no re-download
   const LIVE_LEAD_SEC = 20;          // 'live' mode reads the forming candle 10-20 s before it closes (ticks are 10 s apart)
   const WORKERS = 2;               // parallel TradingView requests; more tends to time out
   const CPS = []; for (let m = FIRST; m <= LAST; m += STEP) CPS.push(m);
@@ -754,7 +752,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   }
 
   // One live scan at checkpoint `cp` (minutes since midnight IST) of today.
-  // mode: 'live' (09:45-11:45, alerts), 'collect' (11:50/11:55: store the candle only), 'report' (12:00, no alerts).
   async function scanOnce(cp, mode = 'live') {
     if (Date.now() < blockedUntil()) {
       const b = $('banner'); b.hidden = false; b.textContent = explain('tv_suspended');
@@ -770,14 +767,12 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
     // 1. History: once a day per stock (restored from the browser when possible).
     await restoreHistory(today);
-    if (mode === 'collect' && !all.some((s) => cache[s] && cache[s].histDay === today)) return null; // nothing to add to
     // The one-request candle read only works right at the candle's close. If this scan is late (page opened
     // late, or the computer was asleep), stocks that are behind re-download their history instead.
     const candleT = utcOf(today, cp) - 300;
     const secNow = nowIst().min * 60 + nowIst().sec;
     const onTime = candleMode === 'live' ? secNow >= cp * 60 - LIVE_LEAD_SEC - 15 && secNow <= cp * 60 - 3 : secNow >= cp * 60 && secNow <= cp * 60 + 240;
     if (!onTime) for (const s of all) { const e = cache[s]; if (e && e.histDay === today && e.bars5 && e.bars5.t[e.bars5.t.length - 1] < candleT) e.needsHistory = true; }
-    if (mode === 'collect' && !onTime) return null;
     const need = all.filter((s) => !isPaused(s) && (!cache[s] || cache[s].histDay !== today || cache[s].needsHistory));
     let done = 0;
     const queue = need.slice();
@@ -805,8 +800,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       catch (e) { batchError = codeOf(e); for (const s of behind) markNotRefreshed(s, batchError); }
     }
 
-    if (mode === 'collect') { setState('closed', 'Collected the ' + hhmm(cp) + ' candle for the 12:00 report', ''); return null; }
-
     // 3. Evaluate.
     const session = { day: today, cp, live: mode === 'live' };
     prevVerdict = {};
@@ -826,12 +819,14 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     scanned = { day: today, cp };
     sessionLabel = dateLabel(today);
     store.set('lastScan', JSON.stringify({ day: today, cp, results }));
-    if (mode === 'report') { store.set('lastReport', JSON.stringify({ day: today, cp, results, groups, alerts: loadSent(today) })); showPdfButton(); }
+    // The final 11:45 scan is the day's report.
+    if (cp === LAST) { store.set('lastReport', JSON.stringify({ day: today, cp, results, groups, alerts: loadSent(today) })); showPdfButton(); }
     render();
     paintRail(today, cp);
     if (mode === 'live') {
       if (newConfirmed) beep();
       await notifyTelegram(session);
+      if (cp === LAST) store.set('lastReport', JSON.stringify({ day: today, cp, results, groups, alerts: loadSent(today) }));
     }
     return session;
   }
@@ -932,7 +927,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   function showPdfButton() {
     const rep = savedReport();
     pdfBtn.hidden = !rep;
-    if (rep) pdfBtn.textContent = 'Download PDF report · ' + dateLabel(rep.day) + ' 12:00';
+    if (rep) pdfBtn.textContent = 'Download PDF report · ' + dateLabel(rep.day) + ' ' + hhmm(rep.cp);
   }
   const dirWord = (d) => (d === 'UP' ? 'Up' : d === 'DOWN' ? 'Down' : 'Flat');
   const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH (2 of 3)' : r.verdict === 'hold' ? 'On hold' : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
@@ -951,7 +946,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
     doc.text('Intraday Top 27 - daily report', 40, 48);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
-    doc.text(dateLabel(rep.day) + ' ' + new Date(rep.day * 86400000).getUTCFullYear() + ' · final scan 12:00 IST · 5-minute chart, NSE · ST Momentum + PI LVLS + Dual MACD Pro', 40, 66);
+    doc.text(dateLabel(rep.day) + ' ' + new Date(rep.day * 86400000).getUTCFullYear() + ' · final scan ' + hhmm(rep.cp) + ' IST · 5-minute chart, NSE · ST Momentum + PI LVLS + Dual MACD Pro', 40, 66);
     doc.text('Confirmed buy: ' + count('buy') + '   Confirmed sell: ' + count('sell') + '   Watch: ' + count('watch') + '   Stocks with a signal today: ' + ok.filter((s) => res[s].sig).length + '   Not scanned: ' + (syms.length - ok.length), 40, 82);
     doc.setTextColor(0);
 
@@ -959,7 +954,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const alerts = Object.entries(rep.alerts || {}).filter(([k]) => k.includes('|'));
     doc.autoTable({
       startY: 100, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
-      head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at 12:00']],
+      head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at ' + hhmm(rep.cp)]],
       body: alerts.length ? alerts.map(([k, at]) => {
         const [side0, sym, t, kind] = k.split('|');
         const side = kind === 'W' ? side0 + ' (watch)' : side0;
@@ -1041,22 +1036,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
           (next ? 'Next scan ' + hhmm(next) + ' IST · ' : 'Scanning stopped for today · ') + sessionLabel + ' · TradingView requests today: ' + callsToday());
       }
       return;
-    }
-
-    // After 11:45: collect the 11:50 / 11:55 candles in the background, then the 12:00 report scan.
-    if (tradingDay && groups.length) {
-      const collect = COLLECT_CPS.find((m) => s >= m * 60 + offset && s <= m * 60 + offset + 240 && store.get('collected-' + now.day + '-' + m, '0') !== '1');
-      if (collect != null && scanned.day === now.day) {
-        store.set('collected-' + now.day + '-' + collect, '1');
-        await scan(collect, 'collect');
-        return;
-      }
-      if (s >= REPORT_CP * 60 + offset && s < (15 * 60 + 30) * 60 && store.get('report-' + now.day, '0') !== '1') {
-        store.set('report-' + now.day, '1');
-        await scan(REPORT_CP, 'report');
-        setState('closed', 'Report scan done · 12:00 IST', 'Use “Download PDF report” to save it · ' + sessionLabel);
-        return;
-      }
     }
 
     // Outside the window: no requests at all.

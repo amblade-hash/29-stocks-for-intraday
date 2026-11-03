@@ -82,9 +82,8 @@ function run({ startMin, endMin, prevSupported = true, label }) {
 const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]) => [s, r.error ? { error: r.error } : { v: r.verdict, sig: r.sig && [r.sig.side, r.sig.t], c: [r.c1, r.c2, r.c3], bounce: r.bounce && r.bounce.zone, ltp: r.ltp, lastT: r.lastT, paused: !!r.paused }]));
 (async () => {
   const A = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, label: 'A: whole morning, prev candles' });
-  const R = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 5, label: 'R: morning + 11:50/11:55 collect + 12:00 report' });
-  const RB = await run({ startMin: 12 * 60, endMin: 12 * 60 + 2, label: 'RB: opened at 12:00, full history' });
-  console.log('R 12:00 report identical to full-history RB:', JSON.stringify(pick(R.last)) === JSON.stringify(pick(RB.last)), '| report cp', R.last.cp);
+  const R = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 5, label: 'R: morning, left open until 12:05 (no scans after 11:45)' });
+  console.log('R: no requests after 11:45:', JSON.stringify(R.calls) === JSON.stringify(A.calls), '| report built from scan', R.last.cp);
   const B = await run({ startMin: 11 * 60 + 45, endMin: 11 * 60 + 47, label: 'B: opened at 11:45, full history' });
   const C = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, prevSupported: false, label: 'C: whole morning, live-candle fallback' });
   const same = (x, y) => JSON.stringify(pick(x.last)) === JSON.stringify(pick(y.last));
