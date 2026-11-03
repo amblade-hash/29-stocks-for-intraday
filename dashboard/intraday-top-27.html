@@ -145,7 +145,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <div class="state" id="state" data-mode="idle"><span class="dot"></span><span id="stateText">Starting…</span></div>
       <div class="meta" id="meta">—</div>
     </div>
-    <div class="meta" id="tgStatus">Telegram: confirmed setups (and, from 4 Nov, WATCH 2 of 3) go to “Stocks to trade by Bladebot242”, during the 09:45–11:45 scans.</div>
+    <div class="meta" id="tgStatus">Telegram: only confirmed buys and sells go to “Stocks to trade by Bladebot242”, during the 09:45–11:45 scans.</div>
     <div>
       <div class="rail" id="rail"></div>
       <div class="rail-labels"><span>09:45</span><span>10:15</span><span>10:45</span><span>11:15</span><span>11:45 IST</span></div>
@@ -173,7 +173,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
     <p>At 12:00 IST one extra scan builds the day's report (no Telegram alerts); the 11:50 and 11:55 candles are collected in the background for it. After that, <b>Download PDF report</b> saves the 12:00 report as a PDF.</p>
-    <p>With Telegram alerts on, each new Confirmed buy or sell, and from 4 Nov each new WATCH (2 of 3) setup, is posted to the Telegram channel at the scan that finds it. Opening signals, holds and paused stocks are never posted. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
+    <p>With Telegram alerts on, each new Confirmed buy or sell is posted to the Telegram channel at the scan that finds it. Nothing else is posted. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
   </details>
 </div>
 
@@ -1333,9 +1333,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
   }
 
-  // WATCH (2 of 3) setups are also posted from this day on (Wed 4 Nov 2026).
-  const WATCH_ALERTS_FROM_DAY = Math.floor(Date.UTC(2026, 10, 4) / 86400000);
-  // Posts new Confirmed (and, from WATCH_ALERTS_FROM_DAY, Watch) setups found by this scan.
+  // Posts new Confirmed buys and sells found by this scan. Nothing else goes to Telegram.
   // Only during the live window, so opening the page later in the day never posts stale alerts.
   async function notifyTelegram(session) {
     const now = nowIst();
@@ -1345,9 +1343,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const fresh = [];
     for (const g of groups) for (const sym of g.symbols) {
       const r = results[sym];
-      const watch = r && r.verdict === 'watch' && session.day >= WATCH_ALERTS_FROM_DAY;
-      if (!r || r.error || !r.sig || (r.verdict !== 'buy' && r.verdict !== 'sell' && !watch)) continue;
-      const key = r.sig.side + '|' + sym + '|' + r.sig.t + (watch ? '|W' : '');
+      if (!r || r.error || !r.sig || (r.verdict !== 'buy' && r.verdict !== 'sell')) continue;
+      const key = r.sig.side + '|' + sym + '|' + r.sig.t;
       if (!sent[key]) fresh.push({ sym, r, key });
     }
     try {
