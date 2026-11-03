@@ -1374,6 +1374,16 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const dirWord = (d) => (d === 'UP' ? 'Up' : d === 'DOWN' ? 'Down' : 'Flat');
   const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH (2 of 3)' : r.verdict === 'hold' ? 'On hold' : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
 
+  // Row colour by trade outcome: green once Exit 1 (or more) was reached, red when stopped out before it.
+  // "Trailed out (EMA 10)" counts as green: the trailing stop only starts after Exit 1 is hit.
+  const tradeTone = (t) => (/Exit [123] hit|Trailed out/.test(String(t || '')) ? 'win' : /^Stopped/.test(String(t || '')) ? 'loss' : null);
+  const TONE_FILL = { win: [220, 242, 228], loss: [248, 222, 220] };
+  const toneRows = (col) => (d) => {
+    if (d.section !== 'body') return;
+    const tone = tradeTone(d.row.raw[col]);
+    if (tone) d.cell.styles.fillColor = TONE_FILL[tone];
+  };
+
   function buildPdf(rep) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
@@ -1390,13 +1400,17 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90);
     doc.text(dateLabel(rep.day) + ' ' + new Date(rep.day * 86400000).getUTCFullYear() + ' · final scan ' + hhmm(rep.cp) + ' IST · 5-minute chart, NSE · ST Momentum + PI LVLS + Dual MACD Pro', 40, 66);
     doc.text('Confirmed buy: ' + count('buy') + '   Confirmed sell: ' + count('sell') + '   Watch: ' + count('watch') + '   Stocks with a signal today: ' + ok.filter((s) => res[s].sig).length + '   Not scanned: ' + (syms.length - ok.length), 40, 82);
+    doc.setFontSize(9);
+    doc.setFillColor(...TONE_FILL.win); doc.rect(40, 88, 10, 8, 'F'); doc.text('Hit Exit 1 or more', 54, 95);
+    doc.setFillColor(...TONE_FILL.loss); doc.rect(150, 88, 10, 8, 'F'); doc.text('Hit SL (Supertrend close) before Exit 1', 164, 95);
     doc.setTextColor(0);
 
     // Alerts sent to Telegram today
     const alerts = Object.entries(rep.alerts || {}).filter(([k]) => k.includes('|'));
     doc.autoTable({
-      startY: 100, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
+      startY: 106, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
       head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at ' + hhmm(rep.cp)]],
+      didParseCell: toneRows(4),
       body: alerts.length ? alerts.map(([k, at]) => {
         const [side0, sym, t, kind] = k.split('|');
         const side = kind === 'W' ? side0 + ' (watch)' : side0;
@@ -1412,7 +1426,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       startY: doc.lastAutoTable.finalY + 18, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
       head: [['Signals today (newest first)', 'Time', 'Side', 'Verdict', 'PI zone bounce', 'Entry', 'Trade']],
       body: withSig.length ? withSig.map((s) => { const r = res[s]; return [nm(s), timeOf(r.sig.t), r.sig.side, plainVerdict(r), r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce', n2(r.tradeObj.entry), r.trade]; }) : [['None', '', '', '', '', '', '']],
-      didParseCell: (d) => { if (d.section === 'body' && d.column.index === 3) { const v = String(d.cell.raw); if (v.startsWith('CONFIRMED BUY')) d.cell.styles.textColor = [15, 122, 74]; if (v.startsWith('CONFIRMED SELL')) d.cell.styles.textColor = [180, 45, 45]; } },
+      didParseCell: (d) => { toneRows(6)(d); if (d.section === 'body' && d.column.index === 3) { const v = String(d.cell.raw); if (v.startsWith('CONFIRMED BUY')) d.cell.styles.textColor = [15, 122, 74]; if (v.startsWith('CONFIRMED SELL')) d.cell.styles.textColor = [180, 45, 45]; } },
     });
 
     // Every stock, by tier
@@ -1420,6 +1434,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       doc.autoTable({
         startY: doc.lastAutoTable.finalY + 18, theme: 'striped', styles: { fontSize: 8 }, headStyles: { fillColor: [60, 72, 66] },
         head: [[g.name, 'ST Momentum', 'PI LVLS bounce', 'Trend at signal (ST / fast / histogram / EMA)', 'Verdict', 'Trade', 'LTP (candle)']],
+        didParseCell: toneRows(5),
         body: g.symbols.map((s) => {
           const r = res[s];
           if (!r || r.error) return [nm(s), 'Not scanned' + (r && r.error ? ' (' + r.error + ')' : ''), '', '', '', '', ''];
