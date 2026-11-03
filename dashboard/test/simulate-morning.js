@@ -1,4 +1,4 @@
-// Run: npm install jsdom@24.1.3 (anywhere), then node dashboard/test/simulate-morning.js dashboard/intraday-top-27.html test/nifty15.json
+// Run: npm install jsdom@24.1.3 jspdf@2.5.1 jspdf-autotable@3.8.2 (anywhere), then node dashboard/test/simulate-morning.js dashboard/intraday-top-27.html test/nifty15.json
 // Simulates the dashboard through a trading morning with a fake TradingView connector.
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
@@ -19,6 +19,7 @@ for (let k = 0; k < n; k++) {
 const SYMS = ['NSE:AAA', 'NSE:BBB', 'NSE:CCC'];
 
 function run({ startMin, endMin, prevSupported = true, label }) {
+  let saved = null;
   let now = utcOf(TODAY, startMin) * 1000;
   const calls = {};
   let ticker = null;
@@ -54,7 +55,10 @@ function run({ startMin, endMin, prevSupported = true, label }) {
           throw { code: 'tool_error', message: 'unknown tool ' + tool };
         },
       };
-      w.claude = { use: async (name) => (name === 'mcp' ? mcp : null) };
+      const jspdf = require('jspdf'); const at = require('jspdf-autotable'); (at.applyPlugin || at.default && at.default.applyPlugin || (() => {}))(jspdf.jsPDF);
+      w.jspdf = jspdf;
+      const downloads = { save: async ({ filename, data }) => { saved = { filename, size: data.size || data.length }; if (data.arrayBuffer)  return { status: 'saved' }; } };
+      w.claude = { use: async (name) => (name === 'mcp' ? mcp : name === 'downloads' ? downloads : null) };
     },
   });
   const w = dom.window;
@@ -65,17 +69,22 @@ function run({ startMin, endMin, prevSupported = true, label }) {
       now = t;
       if (ticker) { ticker(); await flush(); }
     }
+    const btn = w.document.getElementById('pdf');
+    if (!btn.hidden) { btn.click(); await flush(); }
     const last = JSON.parse(w.localStorage.getItem('lastScan') || 'null');
     const status = w.document.getElementById('stateText').textContent + ' | ' + w.document.getElementById('meta').textContent;
     const banner = w.document.getElementById('banner');
-    console.log(`[${label}] calls`, JSON.stringify(calls), '| mode', w.localStorage.getItem('candleMode'), '| last scan', last && last.cp, '| status:', status, banner.hidden ? '' : '| banner: ' + banner.textContent);
-    return { last, calls };
+    console.log(`[${label}] calls`, JSON.stringify(calls), '| mode', w.localStorage.getItem('candleMode'), '| last scan', last && last.cp, '| pdf button:', btn.hidden ? 'hidden' : btn.textContent, '| saved:', JSON.stringify(saved), '| status:', status, banner.hidden ? '' : '| banner: ' + banner.textContent);
+    return { last, calls, w };
   })();
 }
 
 const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]) => [s, r.error ? { error: r.error } : { v: r.verdict, sig: r.sig && [r.sig.side, r.sig.t], c: [r.c1, r.c2, r.c3], bounce: r.bounce && r.bounce.zone, ltp: r.ltp, lastT: r.lastT, paused: !!r.paused }]));
 (async () => {
   const A = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, label: 'A: whole morning, prev candles' });
+  const R = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 5, label: 'R: morning + 11:50/11:55 collect + 12:00 report' });
+  const RB = await run({ startMin: 12 * 60, endMin: 12 * 60 + 2, label: 'RB: opened at 12:00, full history' });
+  console.log('R 12:00 report identical to full-history RB:', JSON.stringify(pick(R.last)) === JSON.stringify(pick(RB.last)), '| report cp', R.last.cp);
   const B = await run({ startMin: 11 * 60 + 45, endMin: 11 * 60 + 47, label: 'B: opened at 11:45, full history' });
   const C = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, prevSupported: false, label: 'C: whole morning, live-candle fallback' });
   const same = (x, y) => JSON.stringify(pick(x.last)) === JSON.stringify(pick(y.last));
