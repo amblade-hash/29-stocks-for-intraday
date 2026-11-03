@@ -145,7 +145,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <div class="state" id="state" data-mode="idle"><span class="dot"></span><span id="stateText">Starting…</span></div>
       <div class="meta" id="meta">—</div>
     </div>
-    <div class="meta" id="tgStatus">Telegram: only confirmed buys and sells go to “Stocks to trade by Bladebot242”, during the 09:45–11:45 scans.</div>
+    <div class="meta" id="tgStatus">Telegram: confirmed setups (and, from 4 Nov, WATCH 2 of 3) go to “Stocks to trade by Bladebot242”, during the 09:45–11:45 scans.</div>
     <div>
       <div class="rail" id="rail"></div>
       <div class="rail-labels"><span>09:45</span><span>10:15</span><span>10:45</span><span>11:15</span><span>11:45 IST</span></div>
@@ -173,7 +173,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
     <p>At 12:00 IST one extra scan builds the day's report (no Telegram alerts); the 11:50 and 11:55 candles are collected in the background for it. After that, <b>Download PDF report</b> saves the 12:00 report as a PDF.</p>
-    <p>With Telegram alerts on, each new Confirmed buy or sell is posted to the Telegram channel at the scan that finds it. Nothing else is posted. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
+    <p>With Telegram alerts on, each new Confirmed buy or sell, and from 4 Nov each new WATCH (2 of 3) setup, is posted to the Telegram channel at the scan that finds it. Opening signals, holds and paused stocks are never posted. Nothing is posted outside 09:45–11:47 IST, and each setup is posted once per browser, so keep the page open on one device.</p>
   </details>
 </div>
 
@@ -1289,14 +1289,19 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const tierOf = (sym) => { const g = groups.find((x) => x.symbols.includes(sym)); return g ? g.name : ''; };
   const short = (sym) => sym.replace(/^NSE:/, '');
 
+  // Telegram block for a CONFIRMED (3 of 3) or WATCH (2 of 3) setup, with each check's result.
   function setupHtml(sym, r) {
     const s = r.sig, tr = r.tradeObj, buy = s.side === 'BUY';
-    const z = r.bounce && r.lv.zones.find((x) => x.name === r.bounce.zone);
+    const z = r.bounce && r.lv && r.lv.zones.find((x) => x.name === r.bounce.zone);
+    const pa = (d) => (d === 'UP' ? '▲' : d === 'DOWN' ? '▼' : '–');
+    const head = r.verdict === 'watch'
+      ? `🟡 <b>WATCH ${s.side} · ${esc(short(sym))}</b> (${esc(tierOf(sym))}) · 2 of 3`
+      : `${buy ? '🟢' : '🔴'} <b>CONFIRMED ${s.side} · ${esc(short(sym))}</b> (${esc(tierOf(sym))})`;
     const lines = [
-      `${buy ? '🟢' : '🔴'} <b>CONFIRMED ${s.side} · ${esc(short(sym))}</b> (${esc(tierOf(sym))})`,
+      head,
       `✅ ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(tr.entry)}`,
-      `✅ Bounced off PI ${r.bounce.zone} (${px(z.lo)}–${px(z.hi)}) at ${timeOf(r.bounce.t)}`,
-      `✅ At the signal candle: Supertrend ${arrow(r.stTrend)} · Dual MACD fast ${arrow(r.stTrend)} histogram ${arrow(r.stTrend)} EMA 9/21 ${arrow(r.stTrend)}`,
+      r.bounce && z ? `✅ Bounced off PI ${r.bounce.zone} (${px(z.lo)}–${px(z.hi)}) at ${timeOf(r.bounce.t)}` : '❌ No PI zone bounce before the signal',
+      `${r.c3 ? '✅' : '❌'} At the signal candle: Supertrend ${r.stTrend === 'BULL' ? '▲' : '▼'} · Dual MACD fast ${pa(r.macdParts.fast)} histogram ${pa(r.macdParts.slow)} EMA 9/21 ${pa(r.macdParts.ema)}`,
       `Targets 1:1 ${px(tr.t1)} · 1:1.5 ${px(tr.t2)} · 1:2 ${px(tr.t3)} · SL: candle close through Supertrend`,
     ];
     if (r.trade && r.trade !== 'Open') lines.push('Trade so far: ' + esc(r.trade));
@@ -1328,7 +1333,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
   }
 
-  // Posts new Confirmed buys and sells found by this scan. Nothing else goes to Telegram.
+  // WATCH (2 of 3) setups are also posted from this day on (Wed 4 Nov 2026).
+  const WATCH_ALERTS_FROM_DAY = Math.floor(Date.UTC(2026, 10, 4) / 86400000);
+  // Posts new Confirmed (and, from WATCH_ALERTS_FROM_DAY, Watch) setups found by this scan.
   // Only during the live window, so opening the page later in the day never posts stale alerts.
   async function notifyTelegram(session) {
     const now = nowIst();
@@ -1338,8 +1345,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const fresh = [];
     for (const g of groups) for (const sym of g.symbols) {
       const r = results[sym];
-      if (!r || r.error || !r.sig || (r.verdict !== 'buy' && r.verdict !== 'sell')) continue;
-      const key = r.sig.side + '|' + sym + '|' + r.sig.t;
+      const watch = r && r.verdict === 'watch' && session.day >= WATCH_ALERTS_FROM_DAY;
+      if (!r || r.error || !r.sig || (r.verdict !== 'buy' && r.verdict !== 'sell' && !watch)) continue;
+      const key = r.sig.side + '|' + sym + '|' + r.sig.t + (watch ? '|W' : '');
       if (!sent[key]) fresh.push({ sym, r, key });
     }
     try {
@@ -1390,7 +1398,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       startY: 100, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
       head: [['Alerts sent to Telegram today', 'Side', 'Signal candle', 'Alerted at', 'Trade at 12:00']],
       body: alerts.length ? alerts.map(([k, at]) => {
-        const [side, sym, t] = k.split('|');
+        const [side0, sym, t, kind] = k.split('|');
+        const side = kind === 'W' ? side0 + ' (watch)' : side0;
         const r = res[sym];
         const now = r && r.sig && String(r.sig.t) === t ? r.trade : r && r.sig ? 'Replaced by ' + r.sig.side + ' at ' + timeOf(r.sig.t) : 'No longer active';
         return [nm(sym), side, timeOf(Number(t)), at, now];

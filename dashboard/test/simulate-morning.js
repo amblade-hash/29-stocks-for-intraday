@@ -1,11 +1,11 @@
-// Run: npm install jsdom@24.1.3 jspdf@2.5.1 jspdf-autotable@3.8.2 (anywhere), then node dashboard/test/simulate-morning.js dashboard/intraday-top-27.html test/nifty15.json
+// Run: npm install jsdom@24.1.3 jspdf@2.5.1 jspdf-autotable@3.8.2 (anywhere), then [SIM_DAY=4] node dashboard/test/simulate-morning.js dashboard/intraday-top-27.html test/nifty15.json
 // Simulates the dashboard through a trading morning with a fake TradingView connector.
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 const nifty = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const IST = 19800;
-const TODAY = Math.floor(Date.UTC(2026, 10, 3) / 86400000); // Tue 3 Nov 2026
+const TODAY = Math.floor(Date.UTC(2026, 10, +(process.env.SIM_DAY || 3)) / 86400000); // Tue 3 Nov 2026
 const utcOf = (day, min) => day * 86400 + min * 60 - IST;
 
 // Real NIFTY candles re-stamped as 5-minute candles, 75 per session, ending today 15:25.
@@ -37,7 +37,7 @@ function run({ startMin, endMin, prevSupported = true, label }) {
         callTool: async (server, tool, input) => {
           const key = server + ':' + tool; calls[key] = (calls[key] || 0) + 1;
           const T = now / 1000;
-          if (server === 'Zapier') return { payload: { results: [{ ok: 1 }] } };
+          if (server === 'Zapier') { (global.tg = global.tg || []).push(input.params.text); return { payload: { results: [{ ok: 1 }] } }; }
           if (tool === 'mcp-watchlist-get-watchlist') return { payload: { watchlist: { symbols: ['###TIER 1', ...SYMS] } } };
           if (tool === 'mcp-tv-get-ohlcv') {
             const m = upTo(T, false), from = Math.max(0, m - input.count);
@@ -91,7 +91,7 @@ const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]
   console.log('A 11:45 results identical to full-history B:', same(A, B));
   console.log('C 11:45 results identical to full-history B:', same(C, B));
   if (!same(A, B)) console.log(JSON.stringify(pick(A.last)), '\n', JSON.stringify(pick(B.last)));
-  console.log('sample:', JSON.stringify(pick(A.last)['NSE:AAA']));
+  console.log('telegram messages:', (global.tg || []).length, '\n' + (global.tg || []).slice(0, 1).join('\n---\n').replace(/<[^>]+>/g, '')); console.log('sample:', JSON.stringify(pick(A.last)['NSE:AAA']));
 })();
 // debug: diff C vs B
 (async () => {})();
