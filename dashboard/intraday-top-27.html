@@ -896,6 +896,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       const b = entry.bars5, last = b.t[b.t.length - 1];
       if (last >= candleT) continue;
       if (last < candleT - 300) { entry.needsHistory = true; markNotRefreshed(s, 'gap'); continue; }
+      // Identical to the candle we already have: TradingView hasn't rolled to the new candle yet. Don't store a copy.
+      const k = b.t.length - 1;
+      if (b.o[k] === x.o && b.h[k] === x.h && b.l[k] === x.l && b.c[k] === x.c && b.v[k] === x.v) { markNotRefreshed(s, 'not_rolled'); continue; }
       b.t.push(candleT); b.o.push(x.o); b.h.push(x.h); b.l.push(x.l); b.c.push(x.c); b.v.push(x.v);
       entry.daily = dailyFrom5m(b);
       entry.stale = false; entry.error = null;
