@@ -137,6 +137,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <button id="sound" type="button" aria-pressed="false">Sound alert: off</button>
       <button id="tg" type="button" aria-pressed="true">Telegram alerts: on</button>
       <button id="pdf" type="button" hidden>Download PDF report</button>
+      <button id="rebuild" type="button" hidden>Build today’s report</button>
     </div>
   </header>
 
@@ -1307,7 +1308,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     for (const s of syms) {
       setState('scanning', 'Checking trades at 12:30 · ' + (++done) + '/' + syms.length + ' stocks with signals today');
       if (Date.now() < blockedUntil() || callsToday() >= DAILY_CALL_BUDGET) break;
-      if (!(await loadHistory(s, today))) continue;
+      // Reuse today's history if it already reaches 12:30 (e.g. just rebuilt); otherwise one request.
+      const have = cache[s] && cache[s].histDay === today && cache[s].bars5 && cache[s].bars5.t[cache[s].bars5.t.length - 1] + 300 >= cutoff;
+      if (!have && !(await loadHistory(s, today))) continue;
       const b = cache[s].bars5;
       let n = 0;
       while (n < b.t.length && b.t[n] + 300 <= cutoff) n++;
@@ -1557,6 +1560,18 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
   });
 
+  // After 11:45 on a trading day with no saved 11:45 scan in this browser (dashboard wasn't open this morning):
+  // rebuild the day on request. Downloads each stock's history once, works out the 11:45 scan (no Telegram:
+  // alerts are only sent during 09:45-11:45), then the 12:30 follow-up runs from the same candles.
+  const rebuildBtn = document.getElementById('rebuild');
+  const hasTodayScan = (day) => { try { const l = JSON.parse(store.get('lastScan', 'null')); return !!l && l.day === day && l.cp === LAST; } catch (e) { return false; } };
+  rebuildBtn.addEventListener('click', async () => {
+    if (busy) return;
+    rebuildBtn.hidden = true;
+    await scan(LAST);
+    await tick();
+  });
+
   // One loop every 10 s decides whether a checkpoint is due. In 'live' candle mode a scan runs a few
   // seconds before its candle closes; otherwise just after (plus grace for the feed).
   async function tick() {
@@ -1584,8 +1599,11 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
 
     // 12:30: follow up every trade from today's signals (once), then the full report is ready.
+    const canRebuild = tradingDay && groups.length && s > LAST * 60 + GRACE_SEC + 60 && !hasTodayScan(now.day);
+    rebuildBtn.hidden = !canRebuild;
+    if (canRebuild) rebuildBtn.textContent = 'Build today’s report (' + dateLabel(now.day) + ', ' + groups.flatMap((g) => g.symbols).length + ' TradingView requests)';
     // Runs once, any time after 12:30 that day: outcomes are always measured at 12:30.
-    if (tradingDay && groups.length && s >= FOLLOW_CP * 60 + GRACE_SEC && store.get('followupAll-' + now.day, '0') !== '1') {
+    if (tradingDay && groups.length && s >= FOLLOW_CP * 60 + GRACE_SEC && hasTodayScan(now.day) && store.get('followupAll-' + now.day, '0') !== '1') {
       store.set('followupAll-' + now.day, '1');
       busy = true;
       try { await followUp(); } catch (e) { console.error('follow-up failed', e); } finally { busy = false; }

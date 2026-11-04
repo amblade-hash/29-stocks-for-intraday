@@ -18,7 +18,7 @@ for (let k = 0; k < n; k++) {
 }
 const SYMS = ['NSE:AAA', 'NSE:BBB', 'NSE:CCC'];
 
-function run({ startMin, endMin, prevSupported = true, label, followFrom }) {
+function run({ startMin, endMin, prevSupported = true, label, followFrom, clickRebuild }) {
   let saved = null;
   let now = utcOf(TODAY, startMin) * 1000;
   const calls = {};
@@ -66,6 +66,12 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom }) {
   const flush = async () => { for (let i = 0; i < 400; i++) await new Promise((r) => setImmediate(r)); };
   return (async () => {
     await flush();
+    if (clickRebuild) {
+      if (ticker) { ticker(); await flush(); }
+      const rb = w.document.getElementById('rebuild');
+      console.log('  rebuild button:', rb.hidden ? 'hidden' : rb.textContent);
+      if (!rb.hidden) { rb.click(); for (let k = 0; k < 6; k++) await flush(); }
+    }
     for (let t = utcOf(TODAY, startMin) * 1000; t <= utcOf(TODAY, endMin) * 1000; t += 10000) {
       now = t;
       if (ticker) { ticker(); await flush(); }
@@ -96,6 +102,11 @@ const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]
     const got = sigs.map((x) => x.t + ':' + x.trade + (x.followed ? '' : ' (not followed)'));
     const want = sigs.map((x) => { const y = st.signals.find((z) => z.t === x.t); return x.t + ':' + (y ? label(y.trade) : '?'); });
     console.log('F every signal followed & matches engine at 12:30:', JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got), '| tradeAt', F.report && F.report.tradeAt, '| extra requests:', F.calls['Trading View:mcp-tv-get-ohlcv'] - 3, '| button:', F.w.document.getElementById('pdf').textContent);
+  }
+  const H = await run({ startMin: 15 * 60 + 20, endMin: 15 * 60 + 21, clickRebuild: true, label: 'H: opened 15:20 with no morning scan, Build today\'s report' });
+  {
+    const pickV = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]) => [s, r.error ? r.error : r.verdict + ':' + (r.sig && r.sig.t)]));
+    console.log('H report: tradeAt', H.report && H.report.tradeAt, '| verdicts match the morning-scanned F:', JSON.stringify(pickV(H.report)) === JSON.stringify(pickV(F.report)), '| outcomes match F:', JSON.stringify(H.report.results['NSE:AAA'].sigList) === JSON.stringify(F.report.results['NSE:AAA'].sigList));
   }
   const B = await run({ startMin: 11 * 60 + 45, endMin: 11 * 60 + 47, label: 'B: opened at 11:45, full history' });
   const C = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, prevSupported: false, label: 'C: whole morning, live-candle fallback' });
