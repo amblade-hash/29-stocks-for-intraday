@@ -84,8 +84,19 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom }) {
 const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]) => [s, r.error ? { error: r.error } : { v: r.verdict, sig: r.sig && [r.sig.side, r.sig.t], c: [r.c1, r.c2, r.c3], bounce: r.bounce && r.bounce.zone, ltp: r.ltp, lastT: r.lastT, paused: !!r.paused }]));
 (async () => {
   const A = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, label: 'A: whole morning, prev candles' });
-  const R = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 35, label: 'R: morning, left open until 12:35 (no requests after 11:45)' });
-  console.log('R: no requests after 11:45:', JSON.stringify(R.calls) === JSON.stringify(A.calls), '| report built from scan', R.last.cp);
+  const F = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 35, label: 'F: morning + 12:30 follow-up of every signal' });
+  {
+    const STM = require(require('path').join(__dirname, '..', 'engine', 'stMomentum.js'));
+    const cutoff = (TODAY * 86400 + 750 * 60 - 19800);
+    let m = 0; while (m < bars.t.length && bars.t[m] + 300 <= cutoff) m++;
+    const sl = (a) => a.slice(0, m);
+    const st = STM.compute({ t: sl(bars.t), o: sl(bars.o), h: sl(bars.h), l: sl(bars.l), c: sl(bars.c), v: sl(bars.v) });
+    const label = (tr) => tr.exit === 'SL' ? 'Stopped (Supertrend close)' : tr.exit === 'TSL' ? 'Trailed out (EMA 10)' : (tr.exit === 'T3' || tr.t3Hit) ? 'Exit 3 hit (1:2)' : tr.t2Hit ? 'Exit 2 hit (1:1.5)' : tr.t1Hit ? 'Exit 1 hit (1:1)' : 'Open';
+    const sigs = (F.report && F.report.results['NSE:AAA'].sigList) || [];
+    const got = sigs.map((x) => x.t + ':' + x.trade + (x.followed ? '' : ' (not followed)'));
+    const want = sigs.map((x) => { const y = st.signals.find((z) => z.t === x.t); return x.t + ':' + (y ? label(y.trade) : '?'); });
+    console.log('F every signal followed & matches engine at 12:30:', JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got), '| tradeAt', F.report && F.report.tradeAt, '| extra requests:', F.calls['Trading View:mcp-tv-get-ohlcv'] - 3, '| button:', F.w.document.getElementById('pdf').textContent);
+  }
   const B = await run({ startMin: 11 * 60 + 45, endMin: 11 * 60 + 47, label: 'B: opened at 11:45, full history' });
   const C = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, prevSupported: false, label: 'C: whole morning, live-candle fallback' });
   const same = (x, y) => JSON.stringify(pick(x.last)) === JSON.stringify(pick(y.last));
