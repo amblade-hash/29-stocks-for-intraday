@@ -1150,8 +1150,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
 
     // 12:30: follow up every trade from today's signals (once), then the full report is ready.
-    if (tradingDay && groups.length && s >= FOLLOW_CP * 60 + GRACE_SEC && s < (15 * 60 + 30) * 60 && store.get('followup-' + now.day, '0') !== '1') {
-      store.set('followup-' + now.day, '1');
+    // Runs once, any time after 12:30 that day: outcomes are always measured at 12:30.
+    if (tradingDay && groups.length && s >= FOLLOW_CP * 60 + GRACE_SEC && store.get('followupAll-' + now.day, '0') !== '1') {
+      store.set('followupAll-' + now.day, '1');
       busy = true;
       try { await followUp(); } catch (e) { console.error('follow-up failed', e); } finally { busy = false; }
       return;
