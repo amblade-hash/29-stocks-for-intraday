@@ -84,20 +84,8 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom }) {
 const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]) => [s, r.error ? { error: r.error } : { v: r.verdict, sig: r.sig && [r.sig.side, r.sig.t], c: [r.c1, r.c2, r.c3], bounce: r.bounce && r.bounce.zone, ltp: r.ltp, lastT: r.lastT, paused: !!r.paused }]));
 (async () => {
   const A = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, label: 'A: whole morning, prev candles' });
-  const R = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 5, label: 'R: morning, left open until 12:05 (no scans after 11:45)' });
+  const R = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 35, label: 'R: morning, left open until 12:35 (no requests after 11:45)' });
   console.log('R: no requests after 11:45:', JSON.stringify(R.calls) === JSON.stringify(A.calls), '| report built from scan', R.last.cp);
-  const F = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 35, followFrom: 600, label: 'F: morning + 12:30 follow-up of signals after 10:00 (test threshold)' });
-  {
-    const STM = require(require('path').join(__dirname, '..', 'engine', 'stMomentum.js'));
-    const cutoff = (TODAY * 86400 + 750 * 60 - 19800);
-    let m = 0; while (m < bars.t.length && bars.t[m] + 300 <= cutoff) m++;
-    const sl = (a) => a.slice(0, m);
-    const st = STM.compute({ t: sl(bars.t), o: sl(bars.o), h: sl(bars.h), l: sl(bars.l), c: sl(bars.c), v: sl(bars.v) });
-    const label = (tr) => tr.exit === 'SL' ? 'Stopped (Supertrend close)' : tr.exit === 'TSL' ? 'Trailed out (EMA 10)' : (tr.exit === 'T3' || tr.t3Hit) ? 'Exit 3 hit (1:2)' : tr.t2Hit ? 'Exit 2 hit (1:1.5)' : tr.t1Hit ? 'Exit 1 hit (1:1)' : 'Open';
-    const got = F.report && F.report.results['NSE:AAA'].sigList.filter((x) => x.followed).map((x) => x.t + ':' + x.trade);
-    const want = st.signals.filter((y) => got && got.some((g) => g.startsWith(y.t + ':'))).map((y) => y.t + ':' + label(y.trade));
-    console.log('F followed:', JSON.stringify(got), '| engine at 12:30:', JSON.stringify(want), '| match:', JSON.stringify(got) === JSON.stringify(want), '| tradeAt', F.report && F.report.tradeAt, '| extra requests:', F.calls['Trading View:mcp-tv-get-ohlcv'] - 3);
-  }
   const B = await run({ startMin: 11 * 60 + 45, endMin: 11 * 60 + 47, label: 'B: opened at 11:45, full history' });
   const C = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, prevSupported: false, label: 'C: whole morning, live-candle fallback' });
   const same = (x, y) => JSON.stringify(pick(x.last)) === JSON.stringify(pick(y.last));
