@@ -1158,16 +1158,18 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     else if (sig && passes === 2) verdict = 'watch';
     // Opening rule: a signal that fired by the 09:45 scan is never alerted, and its stock is held
     // until the 10:15 scan; after that only a newer signal (after 09:45) can be confirmed.
+    // While held, the verdict still shows (confirmed / watch / 1 of 3); `held` stops alerts and sounds.
     const isOpening = (x) => x.t + 300 <= utcOf(session.day, FIRST);
+    let held = false;
     if (sigs.some(isOpening)) {
-      if (session.cp < HOLD_UNTIL) verdict = 'hold';
+      if (session.cp < HOLD_UNTIL) held = true;
       else if (isOpening(sig)) verdict = 'opening';
     }
 
     const trade = sig ? tradeLabel(sig.trade) : '—';
 
     return {
-      sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
+      sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, held, trade,
       sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade, staleCode,
       fresh: !!sig && sig.i === i, // the signal fired on the candle this scan just closed
       prevDay,
@@ -1195,11 +1197,11 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   }
 
   // Highlight: a signal on the candle this scan closed, or a stock that just became Confirmed.
-  const isNew = (sym, r) => !!r && !r.error && (r.fresh || ((r.verdict === 'buy' || r.verdict === 'sell') && prevVerdict[sym] !== undefined && prevVerdict[sym] !== r.verdict));
+  const isNew = (sym, r) => !!r && !r.error && (r.fresh || (!r.held && (r.verdict === 'buy' || r.verdict === 'sell') && prevVerdict[sym] !== undefined && prevVerdict[sym] !== r.verdict));
   const RANK = { buy: 0, sell: 0, watch: 1, hold: 2, opening: 3 };
   const rankOf = (r) => (!r || r.error ? 5 : r.verdict in RANK ? RANK[r.verdict] : r.sig ? 2 : 4);
   const rowId = (sym) => 'row-' + sym.replace(/[^A-Za-z0-9]/g, '_');
-  const verdictText = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH · 2/3' : r.verdict === 'hold' ? 'ON HOLD · till 10:15' : r.verdict === 'opening' ? 'OPENING SIGNAL · skipped' : r.sig ? '1/3' : 'No setup';
+  const verdictText = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH · 2/3' : r.verdict === 'opening' ? 'OPENING SIGNAL · skipped' : r.sig ? '1/3' : 'No setup';
 
   function renderSignals() {
     const all = groups.flatMap((g) => g.symbols).filter((s) => results[s] && !results[s].error && results[s].sig);
@@ -1267,7 +1269,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         if (r.verdict === 'buy') { nBuy++; tr.className = 'confirmed-buy'; }
         if (r.verdict === 'sell') { nSell++; tr.className = 'confirmed-sell'; }
         if (r.verdict === 'watch') nWatch++;
-        if (r.verdict === 'hold') nHold++;
+        if (r.held) nHold++;
         if (isNew(sym, r)) tr.className = 'fresh';
 
         // 1. signal
@@ -1424,7 +1426,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     else banner.hidden = true;
     if (all.every((s) => results[s].error === 'no_session') && cp >= FIRST + 15) store.set('holiday-' + today, '1');
 
-    const newConfirmed = all.some((s) => (results[s].verdict === 'buy' || results[s].verdict === 'sell') && prevVerdict[s] !== undefined && prevVerdict[s] !== results[s].verdict);
+    const newConfirmed = all.some((s) => !results[s].held && (results[s].verdict === 'buy' || results[s].verdict === 'sell') && prevVerdict[s] !== undefined && prevVerdict[s] !== results[s].verdict);
     scanned = { day: today, cp };
     sessionLabel = dateLabel(today);
     store.set('lastScan', JSON.stringify({ day: today, cp, results }));
@@ -1570,7 +1572,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const fresh = [];
     for (const g of groups) for (const sym of g.symbols) {
       const r = results[sym];
-      if (!r || r.error || !r.sig || (r.verdict !== 'buy' && r.verdict !== 'sell')) continue;
+      if (!r || r.error || !r.sig || r.held || (r.verdict !== 'buy' && r.verdict !== 'sell')) continue;
       const key = r.sig.side + '|' + sym + '|' + r.sig.t;
       if (!sent[key]) fresh.push({ sym, r, key });
     }
@@ -1604,7 +1606,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (rep) pdfBtn.textContent = 'Download PDF report · ' + dateLabel(rep.day) + ' ' + hhmm(rep.tradeAt || rep.cp) + (rep.tradeAt ? ' (full)' : '');
   }
   const dirWord = (d) => (d === 'UP' ? 'Up' : d === 'DOWN' ? 'Down' : 'Flat');
-  const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH (2 of 3)' : r.verdict === 'hold' ? 'On hold' : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
+  const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH (2 of 3)' : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
 
   // Row colour by trade outcome: green once Exit 1 (or more) was reached, red when stopped out before it.
   // "Trailed out (EMA 10)" counts as green: the trailing stop only starts after Exit 1 is hit.
