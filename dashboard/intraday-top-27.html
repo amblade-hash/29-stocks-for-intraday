@@ -185,6 +185,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
       <li><b>Trend match</b> — on the signal candle, Supertrend points the signal's way and all three Dual MACD Pro parts agree with it: fast MACD (8/13) above its signal line (9), slow histogram green and EMA 9 above EMA 21 for a BUY; the opposite for a SELL.</li>
       <li><b>Pause after a signal</b> — a stock that gives a signal after 09:45 is checked (and alerted if confirmed) at the scan that sees it, then paused: until 10:45 if the signal was seen by the 10:00 scan, until 11:40 if seen after 10:00. While paused it can't send another alert; signals during a pause are ignored, and after a pause ends the next signal starts a new one.</li>
+      <li><b>Sector rule</b> — a CONFIRMED BUY needs the stock's main sector up, a CONFIRMED SELL needs it down, judged when the signal first appears; otherwise it shows as WATCH · sector against and isn't sent to Telegram. If there is no sector reading yet, this check is skipped.</li>
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
     <p>A stock is <b>Confirmed</b> when all three pass and <b>Watch</b> when a signal has two of three. Scans run at every 5-minute candle close from 09:45 to 11:45 IST while this page is open, then stop for the day. Outside that window the page shows the last session's final 11:45 result.</p>
@@ -1100,8 +1101,46 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const r = evaluateAt(sym, session);
     if (r.error || !r.sigTimes) return r;
     const pause = pauseCheckpoint(r.sigTimes, session);
-    if (!pause) return r;
-    return { ...evaluateAt(sym, { day: session.day, cp: pause.cp }), paused: true, pausedAt: pause.cp, pausedUntil: pause.until, fresh: false };
+    if (!pause) return applySectorRule(sym, r, session);
+    return applySectorRule(sym, { ...evaluateAt(sym, { day: session.day, cp: pause.cp }), paused: true, pausedAt: pause.cp, pausedUntil: pause.until, fresh: false }, session);
+  }
+
+  // Sector rule: a CONFIRMED BUY needs the stock's main sector up, a CONFIRMED SELL needs it down; otherwise it
+  // drops to WATCH ("sector against"). The sector is judged at the live scan that first sees the signal and locked,
+  // so an alert already sent never flips. No sector data at that moment (or a later rebuild): the check is skipped.
+  function primarySectorChange(sym) {
+    const n = (STOCK_SECTORS[sym.replace(/^NSE:/, '')] || [])[0];
+    if (!n || !sectors || !sectors.list) return null;
+    const ssym = sectors.list.find((x) => sectorName(x) === n);
+    const it = ssym && sectors.items[ssym];
+    return it && typeof it.change === 'number' ? { name: n, change: it.change } : null;
+  }
+  function applySectorRule(sym, r, session) {
+    if (!r || r.error || !r.sigList) return r;
+    const key = 'secLock-' + session.day;
+    let locks;
+    try { locks = JSON.parse(store.get(key, '{}')); } catch (e) { locks = {}; }
+    const now = nowIst();
+    const live = session.live && session.day === now.day && now.min >= FIRST && now.min <= LAST + 2;
+    let changed = false;
+    const lockFor = (t) => {
+      const k = sym + '|' + t;
+      if (!(k in locks) && live) { const pc = primarySectorChange(sym); locks[k] = pc ? { name: pc.name, change: pc.change } : null; changed = true; }
+      return locks[k];
+    };
+    const against = (side, lk) => !!lk && ((side === 'BUY' && lk.change < 0) || (side === 'SELL' && lk.change > 0));
+    for (const x of r.sigList) {
+      const lk = lockFor(x.t);
+      x.sector = lk || null;
+      if (x.kind === 'confirmed' && against(x.side, lk)) { x.kind = 'watch'; x.sectorAgainst = true; }
+    }
+    if (r.sig) {
+      const lk = lockFor(r.sig.t);
+      r.sectorAtSignal = lk || null;
+      if ((r.verdict === 'buy' || r.verdict === 'sell') && against(r.sig.side, lk)) { r.verdict = 'watch'; r.sectorAgainst = true; }
+    }
+    if (changed) store.set(key, JSON.stringify(locks));
+    return r;
   }
 
   function evaluateAt(sym, session) {
@@ -1201,7 +1240,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const RANK = { buy: 0, sell: 0, watch: 1, hold: 2, opening: 3 };
   const rankOf = (r) => (!r || r.error ? 5 : r.verdict in RANK ? RANK[r.verdict] : r.sig ? 2 : 4);
   const rowId = (sym) => 'row-' + sym.replace(/[^A-Za-z0-9]/g, '_');
-  const verdictText = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH · 2/3' : r.verdict === 'opening' ? 'OPENING SIGNAL · skipped' : r.sig ? '1/3' : 'No setup';
+  const verdictText = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? (r.sectorAgainst ? 'WATCH · sector against' : 'WATCH · 2/3') : r.verdict === 'opening' ? 'OPENING SIGNAL · skipped' : r.sig ? '1/3' : 'No setup';
 
   function renderSignals() {
     const all = groups.flatMap((g) => g.symbols).filter((s) => results[s] && !results[s].error && results[s].sig);
@@ -1531,6 +1570,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       `✅ ST Momentum ${s.side} at ${timeOf(s.t)} · entry ${px(tr.entry)}`,
       r.bounce && z ? `✅ Bounced off PI ${r.bounce.zone} (${px(z.lo)}–${px(z.hi)}) at ${timeOf(r.bounce.t)}` : '❌ No PI zone bounce before the signal',
       `${r.c3 ? '✅' : '❌'} At the signal candle: Supertrend ${r.stTrend === 'BULL' ? '▲' : '▼'} · Dual MACD fast ${pa(r.macdParts.fast)} histogram ${pa(r.macdParts.slow)} EMA 9/21 ${pa(r.macdParts.ema)}`,
+      ...(r.sectorAtSignal ? [`✅ Sector ${esc(r.sectorAtSignal.name)} ${r.sectorAtSignal.change > 0 ? '▲ +' : r.sectorAtSignal.change < 0 ? '▼ ' : ''}${r.sectorAtSignal.change.toFixed(2)}% at the signal`] : []),
       `Targets 1:1 ${px(tr.t1)} · 1:1.5 ${px(tr.t2)} · 1:2 ${px(tr.t3)} · SL: candle close through Supertrend`,
     ];
     if (r.trade && r.trade !== 'Open') lines.push('Trade so far: ' + esc(r.trade));
@@ -1606,7 +1646,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (rep) pdfBtn.textContent = 'Download PDF report · ' + dateLabel(rep.day) + ' ' + hhmm(rep.tradeAt || rep.cp) + (rep.tradeAt ? ' (full)' : '');
   }
   const dirWord = (d) => (d === 'UP' ? 'Up' : d === 'DOWN' ? 'Down' : 'Flat');
-  const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? 'WATCH (2 of 3)' : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
+  const plainVerdict = (r) => r.verdict === 'buy' ? 'CONFIRMED BUY' : r.verdict === 'sell' ? 'CONFIRMED SELL' : r.verdict === 'watch' ? (r.sectorAgainst ? 'WATCH (sector against)' : 'WATCH (2 of 3)') : r.verdict === 'opening' ? 'Opening signal, skipped' : r.sig ? '1 of 3' : 'No setup';
 
   // Row colour by trade outcome: green once Exit 1 (or more) was reached, red when stopped out before it.
   // "Trailed out (EMA 10)" counts as green: the trailing stop only starts after Exit 1 is hit.
@@ -1677,11 +1717,12 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
     // Every signal of the day, newest first.
     const kindText = { confirmed: 'CONFIRMED', watch: 'WATCH (2 of 3)', one: '1 of 3', opening: 'Opening signal, skipped' };
+    const kindOf = (x) => (x.sectorAgainst ? 'WATCH (sector against)' : kindText[x.kind] || x.kind);
     const everySig = all.slice().sort((a, b) => b.t - a.t);
     doc.autoTable({
       startY: doc.lastAutoTable.finalY + 18, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
       head: [['Every signal today (newest first)', 'Time', 'Side', 'Verdict', 'PI zone bounce', 'Entry', 'Trade at ' + hhmm(rep.tradeAt || rep.cp)]],
-      body: everySig.length ? everySig.map((x) => [nmPrev(x.sym), timeOf(x.t), x.side, kindText[x.kind] || x.kind, x.bounce || 'No bounce', n2(x.entry), x.trade || '-']) : [['None', '', '', '', '', '', '']],
+      body: everySig.length ? everySig.map((x) => [nmPrev(x.sym), timeOf(x.t), x.side, kindOf(x), x.bounce || 'No bounce', n2(x.entry), x.trade || '-']) : [['None', '', '', '', '', '', '']],
       didParseCell: (d) => { toneRows(6)(d); if (d.section === 'body' && d.column.index === 3) { const v = String(d.cell.raw); if (v === 'CONFIRMED') d.cell.styles.textColor = d.row.raw[2] === 'BUY' ? [15, 122, 74] : [180, 45, 45]; } },
     });
 
