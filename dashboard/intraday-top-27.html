@@ -661,7 +661,19 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   };
   // Sectors outside the batch update every 30 minutes from Fri 6 Nov 2026 (before that: 09:45, 10:30, 11:15).
   const SECTOR_REFRESH_FROM_DAY = Math.floor(Date.UTC(2026, 10, 6) / 86400000);
-  const sectorRefreshTimes = (day) => (day >= SECTOR_REFRESH_FROM_DAY ? [9 * 60 + 45, 10 * 60 + 15, 10 * 60 + 45, 11 * 60 + 15] : [9 * 60 + 45, 10 * 60 + 30, 11 * 60 + 15]);
+  // If a day ever reaches the daily request cap, the 30-minute schedule is dropped from the next day on.
+  const sectorRefreshTimes = (day) => {
+    const revertFrom = Number(store.get('sectorRevertFromDay', '0')) || 0;
+    const thirtyMin = day >= SECTOR_REFRESH_FROM_DAY && !(revertFrom && day >= revertFrom);
+    return thirtyMin ? [9 * 60 + 45, 10 * 60 + 15, 10 * 60 + 45, 11 * 60 + 15] : [9 * 60 + 45, 10 * 60 + 30, 11 * 60 + 15];
+  };
+  function checkSectorScheduleAfterDay(day) {
+    if (callsToday() >= DAILY_CALL_BUDGET && !store.get('sectorRevertFromDay', '')) {
+      store.set('sectorRevertFromDay', String(day + 1));
+      return true;
+    }
+    return false;
+  }
   const IST = 19800;               // seconds east of UTC
   const FIRST = 9 * 60 + 45;       // 09:45 IST, minutes since midnight
   const LAST = 11 * 60 + 45;       // 11:45 IST
@@ -1536,6 +1548,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     store.set('lastReport', JSON.stringify({ day: today, cp: LAST, tradeAt: FOLLOW_CP, followed: checked, results: res, groups, alerts: loadSent(today) }));
     results = res; scanned = { day: today, cp: LAST };
     render(); showPdfButton();
+    if (checkSectorScheduleAfterDay(today)) { setState('closed', 'Today reached the ' + DAILY_CALL_BUDGET + '-request cap · sectors go back to 09:45, 10:30, 11:15 from tomorrow', 'Full report ready · use “Download PDF report”'); return; }
     setState('closed', syms.length ? 'Trades checked at 12:30 for ' + checked + ' stock' + (checked === 1 ? '' : 's') + ' with signals today · full report ready' : 'No signals today · report ready',
       'Use “Download PDF report” · TradingView requests today: ' + callsToday());
   }
@@ -1822,7 +1835,8 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (!scanned.day) showSaved();
     const before = tradingDay && s < FIRST * 60;
     const label = scanned.day ? ('Showing ' + dateLabel(scanned.day) + ' · last scan ' + hhmm(scanned.cp) + ' IST') : 'No scan saved yet';
-    setState(before ? 'idle' : 'closed', label, before ? 'First scan at 09:45 IST' : 'Scans run 09:45–11:45 IST on trading days');
+    const reverted = store.get('sectorRevertFromDay', '') === String(now.day + 1);
+    setState(before ? 'idle' : 'closed', label, reverted ? 'Today reached the ' + DAILY_CALL_BUDGET + '-request cap · sectors go back to 09:45, 10:30, 11:15 from tomorrow' : before ? 'First scan at 09:45 IST' : 'Scans run 09:45–11:45 IST on trading days');
   }
 
   async function boot() {
