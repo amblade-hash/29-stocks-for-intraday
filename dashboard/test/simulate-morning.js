@@ -39,7 +39,8 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom, clickR
           const key = server + ':' + tool; calls[key] = (calls[key] || 0) + 1;
           const T = now / 1000;
           if (server === 'Zapier') { (global.tg = global.tg || []).push(input.params.text); return { payload: { results: [{ ok: 1 }] } }; }
-          if (tool === 'mcp-watchlist-get-watchlist') return { payload: { watchlist: { symbols: ['###TIER 1', ...SYMS] } } };
+          if (tool === 'mcp-watchlist-get-watchlist') return { payload: { watchlist: { symbols: input.watchlist_id === '95199208' ? ['NSE:CNXIT', 'NSE:CNXAUTO'] : ['###TIER 1', ...SYMS] } } };
+          if (tool === 'mcp-tv-get-ohlcv' && input.symbol === 'NSE:CNXAUTO') { calls.sectorOhlcv = (calls.sectorOhlcv || 0) + 1; return { payload: { bars: { t: [0, 1], o: [100, 101], h: [102, 103], l: [99, 98], c: [100, 99.5], v: [1, 1] } } }; }
           if (tool === 'mcp-tv-get-ohlcv') {
             const m = upTo(T, false), from = Math.max(0, m - input.count);
             const sl = (a) => a.slice(from, m);
@@ -47,11 +48,12 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom, clickR
           }
           if (tool === 'mcp-tv-get-symbol-data-batch') {
             const prev = input.columns[0].includes('[1]');
-            if (prev && !prevSupported) return { payload: { data: input.symbols.map((s) => ({ symbol: s })) } };
+            const sec = { 'NSE:CNXIT': { change: 1.25 } };
+            if (prev && !prevSupported) return { payload: { data: Object.fromEntries(input.symbols.filter((s) => !s.includes('CNXAUTO')).map((s) => [s, sec[s] || {}])) } };
             // prev: candle that last closed; live: the candle forming now (served with its final values).
             const k = prev ? upTo(T, true) - 1 : upTo(T, false) - 1;
             const vals = [bars.o[k], bars.h[k], bars.l[k], bars.c[k], bars.v[k]];
-            return { payload: { data: input.symbols.map((s) => ({ symbol: s, ...Object.fromEntries(input.columns.map((c, j) => [c, vals[j]])) })) } };
+            return { payload: { data: Object.fromEntries(input.symbols.filter((s) => !s.includes('CNXAUTO')).map((s) => [s, sec[s] || Object.fromEntries(input.columns.map((c, j) => [c, vals[j]]))])) } };
           }
           throw { code: 'tool_error', message: 'unknown tool ' + tool };
         },
@@ -79,9 +81,10 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom, clickR
     const btn = w.document.getElementById('pdf');
     if (!btn.hidden) { btn.click(); await flush(); }
     const last = JSON.parse(w.localStorage.getItem('lastScan') || 'null');
+    const secTxt = w.document.getElementById('sectors').textContent + ' || ' + w.document.getElementById('secMeta').textContent;
     const status = w.document.getElementById('stateText').textContent + ' | ' + w.document.getElementById('meta').textContent;
     const banner = w.document.getElementById('banner');
-    console.log(`[${label}] calls`, JSON.stringify(calls), '| mode', w.localStorage.getItem('candleMode'), '| last scan', last && last.cp, '| pdf button:', btn.hidden ? 'hidden' : btn.textContent, '| saved:', JSON.stringify(saved), '| status:', status, banner.hidden ? '' : '| banner: ' + banner.textContent);
+    console.log(`[${label}] calls`, JSON.stringify(calls), '| mode', w.localStorage.getItem('candleMode'), '| last scan', last && last.cp, '| pdf button:', btn.hidden ? 'hidden' : btn.textContent, '| saved:', JSON.stringify(saved), '| sectors:', secTxt, '| status:', status, banner.hidden ? '' : '| banner: ' + banner.textContent);
     const report = JSON.parse(w.localStorage.getItem('lastReport') || 'null');
     return { last, calls, w, report };
   })();
