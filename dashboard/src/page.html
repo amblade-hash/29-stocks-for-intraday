@@ -225,7 +225,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (SECTOR_NAMES[t]) return SECTOR_NAMES[t];
     return t.replace(/^(CNX|NIFTY_?)/, '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) || t;
   };
-  const SECTOR_REFRESH = [9 * 60 + 45, 10 * 60 + 30, 11 * 60 + 15]; // sectors outside the batch update at these scans
+  // Sectors outside the batch update every 30 minutes from Fri 6 Nov 2026 (before that: 09:45, 10:30, 11:15).
+  const SECTOR_REFRESH_FROM_DAY = Math.floor(Date.UTC(2026, 10, 6) / 86400000);
+  const sectorRefreshTimes = (day) => (day >= SECTOR_REFRESH_FROM_DAY ? [9 * 60 + 45, 10 * 60 + 15, 10 * 60 + 45, 11 * 60 + 15] : [9 * 60 + 45, 10 * 60 + 30, 11 * 60 + 15]);
   const IST = 19800;               // seconds east of UTC
   const FIRST = 9 * 60 + 45;       // 09:45 IST, minutes since midnight
   const LAST = 11 * 60 + 45;       // 11:45 IST
@@ -239,7 +241,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const BARS_1D = 40;
   const SCAN_BUDGET_MS = 150000;    // a scan stops fetching after 2.5 minutes
   const HISTORY_BARS = 1900;        // ~25 sessions of 5-minute candles: indicator warm-up + 22 days for PI LVLS
-  const DAILY_CALL_BUDGET = 120;    // never make more TradingView requests than this in a day
+  const DAILY_CALL_BUDGET = 150;    // never make more TradingView requests than this in a day (a normal day uses ~110-130)
   // Latest-candle columns for the one-request-per-scan update. 'prev' reads the candle that just closed
   // (fetched after the close); 'live' reads the forming candle a few seconds before it closes.
   const CANDLE_COLS = {
@@ -577,7 +579,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       host.appendChild(c);
     }
     const slowAt = sectors.slow && sectors.slow.map((s) => sectors.items[s] && sectors.items[s].at).filter(Boolean)[0];
-    $('secMeta').textContent = (sectors.slow ? (sectors.list.length - sectors.slow.length) + ' update every scan · ' + sectors.slow.length + ' at 09:45, 10:30, 11:15' + (slowAt ? ' (last ' + slowAt + ')' : '') : '');
+    $('secMeta').textContent = (sectors.slow ? (sectors.list.length - sectors.slow.length) + ' update every scan · ' + sectors.slow.length + ' at ' + sectorRefreshTimes(nowIst().day).map(hhmm).join(', ') + (slowAt ? ' (last ' + slowAt + ')' : '') : '');
     const btn = $('secRefresh');
     btn.textContent = 'Refresh sectors' + (sectors.slow ? ' (' + (sectors.slow.length + 1) + ' requests)' : '');
   }
@@ -1009,7 +1011,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       catch (e) { batchError = codeOf(e); for (const s of stocksNow) markNotRefreshed(s, batchError); }
     }
     // The other sectors: one request each, three times a morning.
-    if (SECTOR_REFRESH.includes(cp) && sectors && sectors.slow && store.get('secSlow-' + today + '-' + cp, '0') !== '1') {
+    if (sectorRefreshTimes(today).includes(cp) && sectors && sectors.slow && store.get('secSlow-' + today + '-' + cp, '0') !== '1') {
       store.set('secSlow-' + today + '-' + cp, '1');
       label('Updating ' + sectors.slow.length + ' sectors');
       await refreshSlowSectors(hhmm(cp));
