@@ -93,6 +93,13 @@ function run({ startMin, endMin, prevSupported = true, label, followFrom, clickR
 const pick = (res) => Object.fromEntries(Object.entries(res.results).map(([s, r]) => [s, r.error ? { error: r.error } : { v: r.verdict, sig: r.sig && [r.sig.side, r.sig.t], c: [r.c1, r.c2, r.c3], bounce: r.bounce && r.bounce.zone, ltp: r.ltp, lastT: r.lastT, paused: !!r.paused }]));
 (async () => {
   const A = await run({ startMin: 9 * 60 + 40, endMin: 11 * 60 + 50, label: 'A: whole morning, prev candles' });
+  {
+    const dayOf = (t) => Math.floor((t + 19800) / 86400);
+    const lastClose = (d) => { let c = null; for (let k = 0; k < bars.t.length; k++) if (dayOf(bars.t[k]) === d) c = bars.c[k]; return c; };
+    const a = lastClose(TODAY - 2), b = lastClose(TODAY - 1);
+    const want = ((b - a) / a) * 100, got = A.last.results['NSE:AAA'].prevDay;
+    console.log('prev-day change: got', got && got.change.toFixed(4), 'want', want.toFixed(4), '| match:', !!got && Math.abs(got.change - want) < 1e-9);
+  }
   const F = await run({ startMin: 9 * 60 + 40, endMin: 12 * 60 + 35, label: 'F: morning + 12:30 follow-up of every signal' });
   {
     const STM = require(require('path').join(__dirname, '..', 'engine', 'stMomentum.js'));

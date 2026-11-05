@@ -580,6 +580,16 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const btn = $('secRefresh');
     btn.textContent = 'Refresh sectors' + (sectors.slow ? ' (' + (sectors.slow.length + 1) + ' requests)' : '');
   }
+  // The stock's previous-day close as a small green/red tag.
+  function prevTag(r) {
+    const f = document.createDocumentFragment();
+    if (!r || r.error || !r.prevDay) return f;
+    const ch = r.prevDay.change;
+    const c = el('span', 'sec small ' + (ch > 0 ? 'up' : ch < 0 ? 'down' : ''), 'Prev ' + (ch > 0 ? '▲ +' : ch < 0 ? '▼ ' : '') + ch.toFixed(1) + '%');
+    c.title = 'Closed ' + (ch >= 0 ? 'up ' : 'down ') + Math.abs(ch).toFixed(2) + '% on ' + dateLabel(r.prevDay.day);
+    f.appendChild(c);
+    return f;
+  }
   // A stock's sector chip(s) for its row.
   function sectorTags(stockSym, max) {
     const names = STOCK_SECTORS[stockSym.replace(/^NSE:/, '')] || [];
@@ -682,6 +692,16 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       const d = slice(daily, k);
       if (k && dayOf(d.t[k - 1]) === session.day) lv = PILevels.levels(d);
     }
+    // Previous session's close against the session before it (from the same history: no extra request).
+    let prevDay = null;
+    if (daily && daily.t) {
+      const before = [];
+      for (let k = 0; k < daily.t.length; k++) if (dayOf(daily.t[k]) < session.day) before.push(k);
+      if (before.length >= 2) {
+        const a = daily.c[before[before.length - 2]], b = daily.c[before[before.length - 1]];
+        if (a) prevDay = { change: ((b - a) / a) * 100, day: dayOf(daily.t[before[before.length - 1]]) };
+      }
+    }
 
     const st = STMomentum.compute(bars);
     const dm = DualMACD.compute(bars);
@@ -716,6 +736,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       sym, sig, bounce, lv, stTrend, macdTrend, macdParts, c1, c2, c3, verdict, trade,
       sigCount: sigs.length, ltp: bars.c[i], lastT: bars.t[i], tradeObj: sig && sig.trade, staleCode,
       fresh: !!sig && sig.i === i, // the signal fired on the candle this scan just closed
+      prevDay,
       // Every signal today with its own checks and trade outcome, for the report's day summary.
       sigList: sigs.map((x) => {
         const xb = lv ? PILevels.bounce(bars, x.i, x.side, lv, lookback, dayStart) : null;
@@ -761,7 +782,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       const r = results[sym];
       const tr = el('tr', isNew(sym, r) ? 'fresh' : r.verdict === 'buy' ? 'confirmed-buy' : r.verdict === 'sell' ? 'confirmed-sell' : null);
       tr.appendChild(el('td', 'num', timeOf(r.sig.t)));
-      const tdS = el('td'); tdS.appendChild(el('span', 'sym', sym.replace(/^NSE:/, ''))); tdS.appendChild(sectorTags(sym, 2)); if (isNew(sym, r)) tdS.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdS);
+      const tdS = el('td'); tdS.appendChild(el('span', 'sym', sym.replace(/^NSE:/, ''))); tdS.appendChild(sectorTags(sym, 2)); tdS.appendChild(prevTag(r)); if (isNew(sym, r)) tdS.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdS);
       const tdSide = el('td'); tdSide.appendChild(el('span', 'side ' + (r.sig.side === 'BUY' ? 'buy' : 'sell'), r.sig.side)); tr.appendChild(tdSide);
       const tdV = el('td'); tdV.appendChild(el('span', 'verdict ' + (r.verdict === 'none' ? '' : r.verdict), verdictText(r))); if (r.paused) tdV.appendChild(el('div', 'dim', 'Paused till ' + hhmm(r.pausedUntil))); tr.appendChild(tdV);
       tr.appendChild(el('td', r.bounce ? null : 'dim', r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce'));
@@ -797,7 +818,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
         const tr = el('tr');
         tr.id = rowId(sym);
         const name = sym.replace(/^NSE:/, '');
-        const tdSym = el('td'); tdSym.appendChild(el('span', 'sym', name)); tdSym.appendChild(sectorTags(sym, 2)); if (isNew(sym, r)) tdSym.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdSym);
+        const tdSym = el('td'); tdSym.appendChild(el('span', 'sym', name)); tdSym.appendChild(sectorTags(sym, 2)); tdSym.appendChild(prevTag(r)); if (isNew(sym, r)) tdSym.appendChild(el('span', 'newpill', 'NEW')); tr.appendChild(tdSym);
         if (!r) {
           const td = el('td', 'dim', busy ? 'Scanning…' : 'Waiting for first scan'); td.colSpan = 6; tr.appendChild(td);
           tbody.appendChild(tr); continue;
@@ -1171,6 +1192,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const count = (v) => ok.filter((s) => res[s].verdict === v).length;
     const n2 = (x) => (x == null || Number.isNaN(x) ? '-' : Number(x).toFixed(2));
     const nm = (s) => s.replace(/^NSE:/, '');
+    const nmPrev = (s) => { const p = res[s] && res[s].prevDay; return nm(s) + (p ? '\nPrev day ' + (p.change > 0 ? '+' : '') + p.change.toFixed(2) + '%' : ''); };
 
     doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
     doc.text('Intraday Top 27 - daily report', 40, 48);
@@ -1223,7 +1245,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     doc.autoTable({
       startY: doc.lastAutoTable.finalY + 18, theme: 'grid', styles: { fontSize: 9 }, headStyles: { fillColor: [31, 95, 139] },
       head: [['Every signal today (newest first)', 'Time', 'Side', 'Verdict', 'PI zone bounce', 'Entry', 'Trade at ' + hhmm(rep.tradeAt || rep.cp)]],
-      body: everySig.length ? everySig.map((x) => [nm(x.sym), timeOf(x.t), x.side, kindText[x.kind] || x.kind, x.bounce || 'No bounce', n2(x.entry), x.trade || '-']) : [['None', '', '', '', '', '', '']],
+      body: everySig.length ? everySig.map((x) => [nmPrev(x.sym), timeOf(x.t), x.side, kindText[x.kind] || x.kind, x.bounce || 'No bounce', n2(x.entry), x.trade || '-']) : [['None', '', '', '', '', '', '']],
       didParseCell: (d) => { toneRows(6)(d); if (d.section === 'body' && d.column.index === 3) { const v = String(d.cell.raw); if (v === 'CONFIRMED') d.cell.styles.textColor = d.row.raw[2] === 'BUY' ? [15, 122, 74] : [180, 45, 45]; } },
     });
 
@@ -1237,7 +1259,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
           const r = res[s];
           if (!r || r.error) return [nm(s), 'Not scanned' + (r && r.error ? ' (' + r.error + ')' : ''), '', '', '', '', ''];
           const trend = (r.stTrend === 'BULL' ? 'Up' : 'Down') + ' / ' + dirWord(r.macdParts.fast) + ' / ' + dirWord(r.macdParts.slow) + ' / ' + dirWord(r.macdParts.ema);
-          return [nm(s), r.sig ? r.sig.side + ' ' + timeOf(r.sig.t) + ' @ ' + n2(r.tradeObj.entry) : 'No signal', r.sig ? (r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce') : '-', r.sig ? trend : '-', plainVerdict(r), r.sig ? r.trade : '-', n2(r.ltp) + ' (' + timeOf(r.lastT) + ')'];
+          return [nmPrev(s), r.sig ? r.sig.side + ' ' + timeOf(r.sig.t) + ' @ ' + n2(r.tradeObj.entry) : 'No signal', r.sig ? (r.bounce ? r.bounce.zone + ' at ' + timeOf(r.bounce.t) : 'No bounce') : '-', r.sig ? trend : '-', plainVerdict(r), r.sig ? r.trade : '-', n2(r.ltp) + ' (' + timeOf(r.lastT) + ')'];
         }),
       });
     }
