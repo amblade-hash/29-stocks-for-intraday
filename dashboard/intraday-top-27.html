@@ -642,7 +642,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     CNXIT: 'IT', CNXAUTO: 'Auto', BANKNIFTY: 'Bank', CNXPSUBANK: 'PSU Bank', CNXFINANCE: 'Finance', NIFTY_FIN_SERVICE: 'Finance',
     CNXPHARMA: 'Pharma', NIFTY_HEALTHCARE: 'Healthcare', CNXMETAL: 'Metal', CNXFMCG: 'FMCG', CNXREALTY: 'Realty', CNXENERGY: 'Energy',
     NIFTY_OIL_AND_GAS: 'Oil & Gas', CNXINFRA: 'Infra', CNXPSE: 'PSE', CNXMNC: 'MNC', CNXMEDIA: 'Media', CNXSERVICE: 'Services',
-    CNXCONSUMPTION: 'Consumption', NIFTY_CEMENT: 'Cement', CNXCOMMODITIES: 'Commodities', NIFTY: 'Nifty 50',
+    CNXCONSUMPTION: 'Consumption', NIFTY_CEMENT: 'Cement', NIFTY_CHEMICALS: 'Chemicals', CNXCHEMICALS: 'Chemicals', CNXCOMMODITIES: 'Commodities', NIFTY: 'Nifty 50',
   };
   // Which sector(s) each stock belongs to (first one is shown on the stock's row). Edit to taste.
   const STOCK_SECTORS = {
@@ -651,7 +651,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     TVSMOTOR: ['Auto'], HEROMOTOCO: ['Auto'], BAJAJ_AUTO: ['Auto'], 'M&M': ['Auto'], ASHOKLEY: ['Auto'],
     SAIL: ['Metal', 'PSE'], VEDL: ['Metal'], HINDALCO: ['Metal'], TATASTEEL: ['Metal'],
     RELIANCE: ['Oil & Gas', 'Energy'], DIVISLAB: ['Pharma'], ZYDUSLIFE: ['Pharma'], APOLLOHOSP: ['Healthcare', 'Services'],
-    BHARTIARTL: ['Infra', 'Services'], BHEL: ['PSE', 'Infra'], HAL: ['PSE'], ABB: ['MNC', 'Infra'], UPL: ['Commodities'],
+    BHARTIARTL: ['Infra', 'Services'], BHEL: ['PSE', 'Infra'], HAL: ['PSE'], ABB: ['MNC', 'Infra'], UPL: ['Chemicals'],
   };
   const sectorName = (sym) => {
     const t = sym.replace(/^[A-Z]+:/, '');
