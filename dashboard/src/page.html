@@ -185,6 +185,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
       <li><b>Trend match</b> — on the signal candle, Supertrend points the signal's way and all three Dual MACD Pro parts agree with it: fast MACD (8/13) above its signal line (9), slow histogram green and EMA 9 above EMA 21 for a BUY; the opposite for a SELL.</li>
       <li><b>Pause after a signal</b> — a stock that gives a signal after 09:45 is checked (and alerted if confirmed) at the scan that sees it, then paused: until 10:45 if the signal was seen by the 10:00 scan, until 11:40 if seen after 10:00. While paused it can't send another alert; signals during a pause are ignored, and after a pause ends the next signal starts a new one.</li>
+      <li><b>TradingView requests</b> — about 75 a day, at least 3 seconds apart: each stock's history once at 09:45, one request per 5-minute scan for all stocks, slower sectors once at 09:45, and one request per 5 minutes from 11:50 to 12:30 for stocks that signalled. Hard cap 90 a day.</li>
       <li><b>Sector rule</b> — a CONFIRMED BUY needs the stock's main sector up, a CONFIRMED SELL needs it down, judged when the signal first appears; otherwise it shows as WATCH · sector against and isn't sent to Telegram. If there is no sector reading yet, this check is skipped.</li>
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
@@ -225,21 +226,9 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (SECTOR_NAMES[t]) return SECTOR_NAMES[t];
     return t.replace(/^(CNX|NIFTY_?)/, '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) || t;
   };
-  // Sectors outside the batch update every 30 minutes from Fri 6 Nov 2026 (before that: 09:45, 10:30, 11:15).
-  const SECTOR_REFRESH_FROM_DAY = Math.floor(Date.UTC(2026, 10, 6) / 86400000);
-  // If a day ever reaches the daily request cap, the 30-minute schedule is dropped from the next day on.
-  const sectorRefreshTimes = (day) => {
-    const revertFrom = Number(store.get('sectorRevertFromDay', '0')) || 0;
-    const thirtyMin = day >= SECTOR_REFRESH_FROM_DAY && !(revertFrom && day >= revertFrom);
-    return thirtyMin ? [9 * 60 + 45, 10 * 60 + 15, 10 * 60 + 45, 11 * 60 + 15] : [9 * 60 + 45, 10 * 60 + 30, 11 * 60 + 15];
-  };
-  function checkSectorScheduleAfterDay(day) {
-    if (callsToday() >= DAILY_CALL_BUDGET && !store.get('sectorRevertFromDay', '')) {
-      store.set('sectorRevertFromDay', String(day + 1));
-      return true;
-    }
-    return false;
-  }
+  // Sectors the batch can't quote: one request each, once at 09:45 (plus the Refresh sectors button).
+  // The 30-minute schedule tried on 6 Nov was dropped after TradingView suspended access that morning.
+  const sectorRefreshTimes = () => [9 * 60 + 45];
   const IST = 19800;               // seconds east of UTC
   const FIRST = 9 * 60 + 45;       // 09:45 IST, minutes since midnight
   const LAST = 11 * 60 + 45;       // 11:45 IST
@@ -253,7 +242,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const BARS_1D = 40;
   const SCAN_BUDGET_MS = 150000;    // a scan stops fetching after 2.5 minutes
   const HISTORY_BARS = 1900;        // ~25 sessions of 5-minute candles: indicator warm-up + 22 days for PI LVLS
-  const DAILY_CALL_BUDGET = 150;    // never make more TradingView requests than this in a day (a normal day uses ~110-130)
+  const DAILY_CALL_BUDGET = 90;     // never make more TradingView requests than this in a day (a normal day uses ~75)
   // Latest-candle columns for the one-request-per-scan update. 'prev' reads the candle that just closed
   // (fetched after the close); 'live' reads the forming candle a few seconds before it closes.
   const CANDLE_COLS = {
@@ -344,7 +333,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   // TradingView can suspend connector access for heavy use. Once it says so, make no more requests
   // until the suspension ends (00:00 UTC = 05:30 IST): retrying risks a one-week suspension.
   // Known suspension reported on Mon 2 Nov 2026 (ends 00:00 UTC on 3 Nov = 05:30 IST): make no requests before then.
-  const KNOWN_SUSPENSION_END = Date.UTC(2026, 10, 3);
+  const KNOWN_SUSPENSION_END = Date.UTC(2026, 10, 7); // second suspension, Fri 6 Nov 2026: no requests until 05:30 IST Sat
   const blockedUntil = () => Math.max(Number(store.get('tvBlockedUntil', '0')) || 0, KNOWN_SUSPENSION_END);
   const isQuotaError = (e) => /quota|suspend/i.test(String((e && e.message) || '') + ' ' + (() => { try { return JSON.stringify(e && e.result); } catch (x) { return ''; } })());
   function blockTradingView() {
@@ -354,9 +343,16 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
 
   // Hard cap on TradingView requests per day (a normal morning needs about 55).
   const callsToday = () => Number(store.get('tvCalls-' + nowIst().day, '0')) || 0;
+  // Requests are spaced at least 3 s apart: bursts of requests are what TradingView treated as suspicious.
+  const MIN_GAP_MS = 3000;
+  let nextCallAt = 0;
   async function call(tool, input, retried) {
     if (Date.now() < blockedUntil()) throw { code: 'tv_suspended' };
     if (callsToday() >= DAILY_CALL_BUDGET) throw { code: 'tv_budget' };
+    const wait = nextCallAt - Date.now();
+    nextCallAt = Math.max(Date.now(), nextCallAt) + MIN_GAP_MS;
+    if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+    if (Date.now() < blockedUntil()) throw { code: 'tv_suspended' };
     store.set('tvCalls-' + nowIst().day, String(callsToday() + 1));
     try {
       // 25 s per request: a hung request must not hold up the scan (it is retried once below).
@@ -543,10 +539,12 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const saveSectors = () => store.set('sectors', JSON.stringify(sectors));
   async function ensureSectorList(day) {
     if (sectors && sectors.day === day && sectors.list && sectors.list.length) return;
+    // New day: reuse the list (re-read weekly), start today's readings afresh.
+    const listDay = sectors && sectors.list && sectors.list.length ? sectors.listDay || sectors.day : null;
+    if (listDay != null && day - listDay < 7) { sectors = { day, listDay, list: sectors.list, items: {}, slow: sectors.slow }; saveSectors(); return; }
     const p = await call('mcp-watchlist-get-watchlist', { watchlist_id: SECTORS_WATCHLIST_ID });
     const list = ((p && p.watchlist && p.watchlist.symbols) || []).filter((x) => !x.startsWith('###'));
-    const keep = sectors && sectors.items ? sectors.items : {};
-    sectors = { day, list, items: keep, slow: null };
+    sectors = { day, listDay: day, list, items: {}, slow: null };
     saveSectors();
   }
   // Reads today's % change from a batch payload for the sectors it covers; the rest are marked slow.
@@ -1061,6 +1059,22 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     return session;
   }
 
+  const TRAIL_CPS = []; for (let m = LAST + 5; m <= 12 * 60 + 30; m += 5) TRAIL_CPS.push(m);
+  async function trailCandles(cp) {
+    const today = nowIst().day;
+    let last;
+    try { last = JSON.parse(store.get('lastScan', 'null')); } catch (e) { last = null; }
+    if (!last || last.day !== today) return;
+    await restoreHistory(today);
+    const syms = Object.keys(last.results).filter((s) => last.results[s] && !last.results[s].error && (last.results[s].sigList || []).length);
+    const candleT = utcOf(today, cp) - 300;
+    const behind = syms.filter((s) => cache[s] && cache[s].histDay === today && cache[s].bars5 && cache[s].bars5.t[cache[s].bars5.t.length - 1] < candleT);
+    if (!behind.length) return;
+    setState('scanning', 'Following ' + behind.length + ' signalled stock' + (behind.length === 1 ? '' : 's') + ' · ' + hhmm(cp) + ' candle', '');
+    try { await appendLatest(behind, candleT); await saveHistory(today); } catch (e) { /* the 12:30 follow-up falls back to a download */ }
+    setState('closed', 'Following signalled stocks until 12:30 · last candle ' + hhmm(cp), 'Full report after the 12:30 check');
+  }
+
   // Follows one trade forward with ST Momentum's own exit rules (SL on a candle close through the Supertrend
   // before Exit 1; trailing stop on a close through EMA 10 after Exit 1; Exit 3 ends the trade).
   function followTrade(st, bars, from, tr0) {
@@ -1114,7 +1128,6 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     store.set('lastReport', JSON.stringify({ day: today, cp: LAST, tradeAt: FOLLOW_CP, followed: checked, results: res, groups, alerts: loadSent(today) }));
     results = res; scanned = { day: today, cp: LAST };
     render(); showPdfButton();
-    if (checkSectorScheduleAfterDay(today)) { setState('closed', 'Today reached the ' + DAILY_CALL_BUDGET + '-request cap · sectors go back to 09:45, 10:30, 11:15 from tomorrow', 'Full report ready · use “Download PDF report”'); return; }
     setState('closed', syms.length ? 'Trades checked at 12:30 for ' + checked + ' stock' + (checked === 1 ? '' : 's') + ' with signals today · full report ready' : 'No signals today · report ready',
       'Use “Download PDF report” · TradingView requests today: ' + callsToday());
   }
@@ -1385,6 +1398,18 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       return;
     }
 
+    // 11:50-12:30: keep reading the latest candle for stocks that had a signal (one request per 5 minutes),
+    // so the 12:30 follow-up needs no history downloads.
+    if (tradingDay && groups.length && hasTodayScan(now.day)) {
+      const m = TRAIL_CPS.find((x) => s >= x * 60 + offset && s <= x * 60 + offset + 240 && store.get('trail-' + now.day + '-' + x, '0') !== '1');
+      if (m != null) {
+        store.set('trail-' + now.day + '-' + m, '1');
+        busy = true;
+        try { await trailCandles(m); } catch (e) { console.error('trail failed', e); } finally { busy = false; }
+        return;
+      }
+    }
+
     // 12:30: follow up every trade from today's signals (once), then the full report is ready.
     const canRebuild = tradingDay && groups.length && s > LAST * 60 + GRACE_SEC + 60 && !hasTodayScan(now.day);
     rebuildBtn.hidden = !canRebuild;
@@ -1401,8 +1426,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (!scanned.day) showSaved();
     const before = tradingDay && s < FIRST * 60;
     const label = scanned.day ? ('Showing ' + dateLabel(scanned.day) + ' · last scan ' + hhmm(scanned.cp) + ' IST') : 'No scan saved yet';
-    const reverted = store.get('sectorRevertFromDay', '') === String(now.day + 1);
-    setState(before ? 'idle' : 'closed', label, reverted ? 'Today reached the ' + DAILY_CALL_BUDGET + '-request cap · sectors go back to 09:45, 10:30, 11:15 from tomorrow' : before ? 'First scan at 09:45 IST' : 'Scans run 09:45–11:45 IST on trading days');
+    setState(before ? 'idle' : 'closed', label, before ? 'First scan at 09:45 IST' : 'Scans run 09:45–11:45 IST on trading days');
   }
 
   async function boot() {
@@ -1417,7 +1441,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     }
     try {
       const savedGroups = JSON.parse(store.get('groups', 'null'));
-      if (savedGroups && savedGroups.day === nowIst().day && savedGroups.groups.length) groups = savedGroups.groups;
+      if (savedGroups && nowIst().day - savedGroups.day < 7 && savedGroups.groups.length) groups = savedGroups.groups; // re-read weekly
       else { groups = await loadWatchlist(); store.set('groups', JSON.stringify({ day: nowIst().day, groups })); }
     } catch (e) {
       try { const g = JSON.parse(store.get('groups', 'null')); if (g && g.groups.length) groups = g.groups; } catch (x) {}

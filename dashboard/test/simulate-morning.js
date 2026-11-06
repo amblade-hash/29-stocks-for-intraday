@@ -1,4 +1,4 @@
-// Run: npm install jsdom@24.1.3 jspdf@2.5.1 jspdf-autotable@3.8.2 (anywhere), then [SIM_DAY=4] node dashboard/test/simulate-morning.js dashboard/intraday-top-27.html test/nifty15.json
+// Run: npm install jsdom@24.1.3 jspdf@2.5.1 jspdf-autotable@3.8.2 (anywhere), then SIM_DAY=9 node dashboard/test/simulate-morning.js dashboard/intraday-top-27.html test/nifty15.json
 // Simulates the dashboard through a trading morning with a fake TradingView connector.
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
