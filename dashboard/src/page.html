@@ -185,7 +185,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       <li><b>PI LVLS bounce</b> — within the bounce window ending on the signal candle, a candle tagged a PI zone (R2, R1, S1, S2) and closed back outside it: low into the zone and close above it for a BUY, high into the zone and close below it for a SELL.</li>
       <li><b>Trend match</b> — on the signal candle, Supertrend points the signal's way and all three Dual MACD Pro parts agree with it: fast MACD (8/13) above its signal line (9), slow histogram green and EMA 9 above EMA 21 for a BUY; the opposite for a SELL.</li>
       <li><b>Pause after a signal</b> — a stock that gives a signal after 09:45 is checked (and alerted if confirmed) at the scan that sees it, then paused: until 10:45 if the signal was seen by the 10:00 scan, until 11:40 if seen after 10:00. While paused it can't send another alert; signals during a pause are ignored, and after a pause ends the next signal starts a new one.</li>
-      <li><b>TradingView requests</b> — about 75 a day, at least 3 seconds apart: each stock's history once at 09:45, one request per 5-minute scan for all stocks, slower sectors once at 09:45, and one request per 5 minutes from 11:50 to 12:30 for stocks that signalled. Hard cap 90 a day.</li>
+      <li><b>TradingView requests</b> — about 87 a day, at least 3 seconds apart: each stock's history once at 09:45, one request per 5-minute scan for all stocks, all sectors at 09:45 and 11:15, and one request per 5 minutes from 11:50 to 12:30 for stocks that signalled. Hard cap 100 a day.</li>
       <li><b>Sector rule</b> — a CONFIRMED BUY needs the stock's main sector up, a CONFIRMED SELL needs it down, judged when the signal first appears; otherwise it shows as WATCH · sector against and isn't sent to Telegram. If there is no sector reading yet, this check is skipped.</li>
       <li><b>Opening rule</b> — a BUY or SELL that fired by the 09:45 scan (opening candles) is never alerted. Its stock is on hold until the 10:15 scan; after that only a new signal that fired after 09:45 can be confirmed.</li>
     </ol>
@@ -226,9 +226,10 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     if (SECTOR_NAMES[t]) return SECTOR_NAMES[t];
     return t.replace(/^(CNX|NIFTY_?)/, '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) || t;
   };
-  // Sectors the batch can't quote: one request each, once at 09:45 (plus the Refresh sectors button).
-  // The 30-minute schedule tried on 6 Nov was dropped after TradingView suspended access that morning.
-  const sectorRefreshTimes = () => [9 * 60 + 45];
+  // All sectors are read twice a day, at 09:45 and 11:15 (plus the Refresh sectors button), and the bar and
+  // the sector rule use the latest of those readings. IT/Finance/Energy come in the stock scan's request;
+  // the others take one request each.
+  const sectorRefreshTimes = () => [9 * 60 + 45, 11 * 60 + 15];
   const IST = 19800;               // seconds east of UTC
   const FIRST = 9 * 60 + 45;       // 09:45 IST, minutes since midnight
   const LAST = 11 * 60 + 45;       // 11:45 IST
@@ -242,7 +243,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
   const BARS_1D = 40;
   const SCAN_BUDGET_MS = 150000;    // a scan stops fetching after 2.5 minutes
   const HISTORY_BARS = 1900;        // ~25 sessions of 5-minute candles: indicator warm-up + 22 days for PI LVLS
-  const DAILY_CALL_BUDGET = 90;     // never make more TradingView requests than this in a day (a normal day uses ~75)
+  const DAILY_CALL_BUDGET = 100;    // never make more TradingView requests than this in a day (a normal day uses ~87)
   // Latest-candle columns for the one-request-per-scan update. 'prev' reads the candle that just closed
   // (fetched after the close); 'live' reads the forming candle a few seconds before it closes.
   const CANDLE_COLS = {
@@ -583,13 +584,14 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     for (const sym of sectors.list) {
       const it = sectors.items[sym];
       const c = el('span', 'sec' + (it ? (it.change > 0 ? ' up' : it.change < 0 ? ' down' : '') : ''));
-      c.title = sym.replace(/^NSE:/, '') + (it ? ' · updated ' + it.at + (it.via === 'live' ? ' (every scan)' : '') : ' · not loaded yet');
+      c.title = sym.replace(/^NSE:/, '') + (it ? ' · reading from ' + it.at : ' · not loaded yet');
       c.appendChild(document.createTextNode(sectorName(sym)));
       c.appendChild(el('b', null, it ? (it.change > 0 ? '▲ +' : it.change < 0 ? '▼ ' : '') + it.change.toFixed(2) + '%' : '—'));
       host.appendChild(c);
     }
     const slowAt = sectors.slow && sectors.slow.map((s) => sectors.items[s] && sectors.items[s].at).filter(Boolean)[0];
-    $('secMeta').textContent = (sectors.slow ? (sectors.list.length - sectors.slow.length) + ' update every scan · ' + sectors.slow.length + ' at ' + sectorRefreshTimes(nowIst().day).map(hhmm).join(', ') + (slowAt ? ' (last ' + slowAt + ')' : '') : '');
+    const lastAt = sectors.list.map((x) => sectors.items[x] && sectors.items[x].at).filter(Boolean).sort().pop();
+    $('secMeta').textContent = 'Updated at ' + sectorRefreshTimes().map(hhmm).join(' and ') + (lastAt ? ' · showing ' + lastAt : ' · first reading at 09:45');
     const btn = $('secRefresh');
     btn.textContent = 'Refresh sectors' + (sectors.slow ? ' (' + (sectors.slow.length + 1) + ' requests)' : '');
   }
@@ -1012,7 +1014,10 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
     const tooLate = !onTime;
     // Sectors the batch can quote ride along in the same request (nothing extra when stocks are read anyway).
     try { await ensureSectorList(today); } catch (e) {}
-    const secQuoted = sectors && sectors.list ? (sectors.slow ? sectors.list.filter((x) => !sectors.slow.includes(x)) : sectors.list) : [];
+    // Sector readings at 09:45 and 11:15 only (or at the first scan of the day if the page opened after 09:45).
+    const firstReading = !!sectors && !!sectors.list && sectors.day === today && !Object.keys(sectors.items || {}).length;
+    const sectorTime = sectorRefreshTimes().includes(cp) || firstReading;
+    const secQuoted = sectors && sectors.list && sectorTime ? (sectors.slow ? sectors.list.filter((x) => !sectors.slow.includes(x)) : sectors.list) : [];
     const stocksNow = tooLate ? [] : behind;
     if (tooLate && behind.length) { batchError = 'tv_batch'; for (const s of behind) markNotRefreshed(s, 'tv_batch'); }
     if ((stocksNow.length || secQuoted.length) && Date.now() < deadline) {
@@ -1021,7 +1026,7 @@ tr.confirmed-sell { background: color-mix(in srgb, var(--sell-soft) 55%, transpa
       catch (e) { batchError = codeOf(e); for (const s of stocksNow) markNotRefreshed(s, batchError); }
     }
     // The other sectors: one request each, three times a morning.
-    if (sectorRefreshTimes(today).includes(cp) && sectors && sectors.slow && store.get('secSlow-' + today + '-' + cp, '0') !== '1') {
+    if (sectorTime && sectors && sectors.slow && store.get('secSlow-' + today + '-' + cp, '0') !== '1') {
       store.set('secSlow-' + today + '-' + cp, '1');
       label('Updating ' + sectors.slow.length + ' sectors');
       await refreshSlowSectors(hhmm(cp));
